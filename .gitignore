@@ -1,0 +1,51 @@
+## .NET / Visual Studio / WinUI 3
+bin/
+obj/
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.cache
+*.log
+*.tmp
+*.bak
+TestResults/
+BenchmarkDotNet.Artifacts/
+AppPackages/
+BundleArtifacts/
+Package.StoreAssociation.xml
+_pkginfo.txt
+*.appx
+*.appxbundle
+*.appxupload
+*.msix
+*.msixbundle
+publish/
+*.publishsettings
+
+## NuGet / Packages
+*.nupkg
+*.snupkg
+packages/
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+## Secrets & Local Config
+.env
+.env.*
+*.pfx
+*.snk
+*.cer
+*.key
+*.pem
+settings.json
+appsettings.*.json
+
+## OS / Editors
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/

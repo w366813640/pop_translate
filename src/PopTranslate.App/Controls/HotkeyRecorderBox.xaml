@@ -1,0 +1,57 @@
+<UserControl
+    x:Class="PopTranslate.App.Controls.HotkeyRecorderBox"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <StackPanel Spacing="4">
+        <Grid ColumnSpacing="6">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <Button
+                x:Name="RecorderButton"
+                Grid.Column="0"
+                HorizontalAlignment="Stretch"
+                HorizontalContentAlignment="Left"
+                MinWidth="180"
+                Height="34"
+                Padding="12,0"
+                Click="RecorderButton_Click"
+                PreviewKeyDown="RecorderButton_PreviewKeyDown"
+                LostFocus="RecorderButton_LostFocus">
+                <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                    <FontIcon
+                        x:Name="StatusGlyph"
+                        FontSize="13"
+                        Glyph="&#xE765;"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <TextBlock
+                        x:Name="DisplayLabel"
+                        FontSize="13"
+                        FontWeight="SemiBold"
+                        Text="未设置" />
+                </StackPanel>
+            </Button>
+
+            <Button
+                x:Name="ClearButton"
+                Grid.Column="1"
+                Width="34"
+                Height="34"
+                Padding="0"
+                ToolTipService.ToolTip="清除快捷键"
+                Click="ClearButton_Click">
+                <FontIcon FontSize="12" Glyph="&#xE711;" />
+            </Button>
+        </Grid>
+
+        <TextBlock
+            x:Name="ErrorTextBlock"
+            FontSize="12"
+            TextWrapping="Wrap"
+            Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+            Visibility="Collapsed" />
+    </StackPanel>
+</UserControl>

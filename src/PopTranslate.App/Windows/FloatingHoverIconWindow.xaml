@@ -1,0 +1,43 @@
+<winex:WindowEx
+    x:Class="PopTranslate.App.Windows.FloatingHoverIconWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:winex="using:WinUIEx"
+    Title="PopTranslate Hover"
+    Width="36"
+    Height="36"
+    IsTitleBarVisible="False"
+    IsResizable="False"
+    IsMaximizable="False"
+    IsMinimizable="False"
+    IsAlwaysOnTop="True">
+
+    <Grid
+        x:Name="RootGrid"
+        Background="Transparent"
+        PreviewKeyDown="RootGrid_PreviewKeyDown">
+        <Button
+            x:Name="HoverButton"
+            HorizontalAlignment="Stretch"
+            VerticalAlignment="Stretch"
+            Padding="0"
+            CornerRadius="8"
+            BorderThickness="1"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            Background="{ThemeResource AccentFillColorDefaultBrush}"
+            ToolTipService.ToolTip="点击翻译选中文本"
+            Click="HoverButton_Click"
+            PointerEntered="HoverButton_PointerEntered"
+            PointerExited="HoverButton_PointerExited">
+            <Grid>
+                <TextBlock
+                    Text="译"
+                    FontSize="15"
+                    FontWeight="SemiBold"
+                    Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center" />
+            </Grid>
+        </Button>
+    </Grid>
+</winex:WindowEx>

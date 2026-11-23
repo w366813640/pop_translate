@@ -1,0 +1,267 @@
+using PopTranslate.Core.Contracts;
+using PopTranslate.Core.Models;
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+using Microsoft.UI.Xaml.Controls;
+
+namespace PopTranslate.App.ViewModels;
+
+public sealed partial class NetworkSettingsViewModel : ObservableObject
+{
+    private readonly ISettingsStore _settingsStore;
+    private readonly ISecretProtector _secretProtector;
+    private readonly IStartupPrivilegeService _startupPrivilegeService;
+    private bool _isLoading;
+
+    public NetworkSettingsViewModel(
+        ISettingsStore settingsStore,
+        ISecretProtector secretProtector,
+        IStartupPrivilegeService startupPrivilegeService)
+    {
+        _settingsStore = settingsStore;
+        _secretProtector = secretProtector;
+        _startupPrivilegeService = startupPrivilegeService;
+    }
+
+    public event EventHandler? RestartAsAdministratorRequested;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsCustomProxyMode))]
+    public partial int ProxyModeIndex { get; set; }
+
+    [ObservableProperty]
+    public partial string Host { get; set; } = "127.0.0.1";
+
+    [ObservableProperty]
+    public partial double Port { get; set; } = 7890;
+
+    [ObservableProperty]
+    public partial string Username { get; set; } = string.Empty;
+
+    [ObservableProperty]
+    public partial string PasswordPlaintext { get; set; } = string.Empty;
+
+    [ObservableProperty]
+    public partial bool BypassLocalAddresses { get; set; } = true;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasProxyFeedback))]
+    public partial string? ProxyFeedbackMessage { get; set; }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ProxyFeedbackSeverity))]
+    public partial bool IsProxyFeedbackError { get; set; }
+
+    // Privilege & Elevated Task Scheduler section
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(PrivilegeStatusLabel))]
+    [NotifyPropertyChangedFor(nameof(PrivilegeStatusDescription))]
+    [NotifyPropertyChangedFor(nameof(CanRestartAsAdministrator))]
+    public partial bool IsRunningAsAdministrator { get; set; }
+
+    [ObservableProperty]
+    public partial bool IsElevatedStartupTaskEnabled { get; set; }
+
+    [ObservableProperty]
+    public partial bool IsUpdatingElevatedTask { get; set; }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasPrivilegeFeedback))]
+    public partial string? PrivilegeFeedbackMessage { get; set; }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(PrivilegeFeedbackSeverity))]
+    public partial bool IsPrivilegeFeedbackError { get; set; }
+
+    public bool IsCustomProxyMode => ProxyModeIndex is (int)ProxyMode.Http or (int)ProxyMode.Socks5;
+
+    public bool HasProxyFeedback => !string.IsNullOrWhiteSpace(ProxyFeedbackMessage);
+
+    public InfoBarSeverity ProxyFeedbackSeverity => IsProxyFeedbackError ? InfoBarSeverity.Error : InfoBarSeverity.Success;
+
+    public bool HasPrivilegeFeedback => !string.IsNullOrWhiteSpace(PrivilegeFeedbackMessage);
+
+    public InfoBarSeverity PrivilegeFeedbackSeverity => IsPrivilegeFeedbackError ? InfoBarSeverity.Error : InfoBarSeverity.Success;
+
+    public bool CanRestartAsAdministrator => !IsRunningAsAdministrator;
+
+    public string PrivilegeStatusLabel => IsRunningAsAdministrator ? "管理员 (Administrator)" : "标准用户 (Standard)";
+
+    public string PrivilegeStatusDescription => IsRunningAsAdministrator
+        ? "当前已具备管理员权限，可正常捕获管理员终端、IDE 或任务管理器等高权限窗口中的划词文本，并可配置任务计划免 UAC 自启。"
+        : "默认以标准用户安全运行。如需在管理员权限窗口中划词取词，或配置免 UAC 提权开机自启，请先以管理员身份重启 PopTranslate。";
+
+    public async Task LoadFromAsync(AppSettings settings)
+    {
+        _isLoading = true;
+        try
+        {
+            ProxyModeIndex = (int)settings.Proxy.Mode;
+            Host = string.IsNullOrWhiteSpace(settings.Proxy.Host) ? "127.0.0.1" : settings.Proxy.Host;
+            Port = Math.Clamp(settings.Proxy.Port, 1, 65535);
+            Username = settings.Proxy.Username;
+            BypassLocalAddresses = settings.Proxy.BypassLocalAddresses;
+
+            PasswordPlaintext = string.Empty;
+            if (!string.IsNullOrWhiteSpace(settings.Proxy.EncryptedPassword) &&
+                _secretProtector.TryUnprotect(settings.Proxy.EncryptedPassword, out var decrypted))
+            {
+                PasswordPlaintext = decrypted;
+            }
+
+            try
+            {
+                IsRunningAsAdministrator = _startupPrivilegeService.IsRunningAsAdministrator();
+            }
+            catch
+            {
+                IsRunningAsAdministrator = false;
+            }
+
+            IsElevatedStartupTaskEnabled = settings.UseElevatedStartupTask;
+            ProxyFeedbackMessage = null;
+            IsProxyFeedbackError = false;
+            PrivilegeFeedbackMessage = null;
+            IsPrivilegeFeedbackError = false;
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+
+        // Query Task Scheduler off the UI thread so opening Settings never stalls on schtasks.exe.
+        bool taskEnabled;
+        try
+        {
+            taskEnabled = await Task.Run(() => _startupPrivilegeService.IsElevatedStartupTaskEnabled());
+        }
+        catch
+        {
+            taskEnabled = settings.UseElevatedStartupTask;
+        }
+
+        _isLoading = true;
+        try
+        {
+            IsElevatedStartupTaskEnabled = taskEnabled;
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    [RelayCommand]
+    private async Task SaveProxySettingsAsync()
+    {
+        try
+        {
+            var updated = _settingsStore.Current.Clone();
+            updated.Proxy.Mode = ProxyModeIndex switch
+            {
+                (int)ProxyMode.Direct => ProxyMode.Direct,
+                (int)ProxyMode.Http => ProxyMode.Http,
+                (int)ProxyMode.Socks5 => ProxyMode.Socks5,
+                _ => ProxyMode.System,
+            };
+            updated.Proxy.Host = Host?.Trim() ?? string.Empty;
+            updated.Proxy.Port = double.IsNaN(Port) ? 7890 : Math.Clamp((int)Math.Round(Port), 1, 65535);
+            updated.Proxy.Username = Username?.Trim() ?? string.Empty;
+            updated.Proxy.EncryptedPassword = string.IsNullOrWhiteSpace(PasswordPlaintext)
+                ? string.Empty
+                : _secretProtector.Protect(PasswordPlaintext);
+            updated.Proxy.BypassLocalAddresses = BypassLocalAddresses;
+
+            await _settingsStore.SaveAsync(updated);
+            IsProxyFeedbackError = false;
+            ProxyFeedbackMessage = "网络代理配置已保存并立即生效。";
+        }
+        catch (Exception ex)
+        {
+            IsProxyFeedbackError = true;
+            ProxyFeedbackMessage = $"保存代理配置失败：{ex.Message}";
+        }
+    }
+
+    [RelayCommand]
+    private void RestartAsAdministrator()
+    {
+        RestartAsAdministratorRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    partial void OnProxyModeIndexChanged(int value)
+    {
+        if (!_isLoading && value is (int)ProxyMode.System or (int)ProxyMode.Direct)
+        {
+            _ = SaveProxySettingsAsync();
+        }
+    }
+
+    partial void OnIsElevatedStartupTaskEnabledChanged(bool value)
+    {
+        if (_isLoading || IsUpdatingElevatedTask)
+        {
+            return;
+        }
+
+        _ = ApplyElevatedStartupTaskAsync(value);
+    }
+
+    private async Task ApplyElevatedStartupTaskAsync(bool enabled)
+    {
+        IsUpdatingElevatedTask = true;
+        try
+        {
+            var exePath = Environment.ProcessPath ?? string.Empty;
+            var result = await _startupPrivilegeService.SetElevatedStartupTaskAsync(enabled, exePath);
+
+            if (!result.Succeeded)
+            {
+                // Revert toggle without re-triggering recursion.
+                _isLoading = true;
+                try
+                {
+                    IsElevatedStartupTaskEnabled = !enabled;
+                }
+                finally
+                {
+                    _isLoading = false;
+                }
+
+                IsPrivilegeFeedbackError = true;
+                PrivilegeFeedbackMessage = result.RequiresElevation
+                    ? "配置任务计划免 UAC 提权自启需要管理员权限，请先点击「以管理员身份重启」。"
+                    : (string.IsNullOrWhiteSpace(result.Message) ? "配置提权开机自启任务失败。" : result.Message);
+                return;
+            }
+
+            var updated = _settingsStore.Current.Clone();
+            updated.UseElevatedStartupTask = enabled;
+            await _settingsStore.SaveAsync(updated);
+
+            IsPrivilegeFeedbackError = false;
+            PrivilegeFeedbackMessage = enabled
+                ? "已通过 Windows 任务计划程序创建免 UAC 提权开机自启任务。"
+                : "已移除免 UAC 提权开机自启任务。";
+        }
+        catch (Exception ex)
+        {
+            _isLoading = true;
+            try
+            {
+                IsElevatedStartupTaskEnabled = !enabled;
+            }
+            finally
+            {
+                _isLoading = false;
+            }
+
+            IsPrivilegeFeedbackError = true;
+            PrivilegeFeedbackMessage = $"操作提权开机自启失败：{ex.Message}";
+        }
+        finally
+        {
+            IsUpdatingElevatedTask = false;
+        }
+    }
+}

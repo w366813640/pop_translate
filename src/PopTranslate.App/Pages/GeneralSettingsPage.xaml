@@ -1,0 +1,394 @@
+<Page
+    x:Class="PopTranslate.App.Pages.GeneralSettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="28,20,28,28">
+        <StackPanel Spacing="16" MaxWidth="760" HorizontalAlignment="Left">
+            <TextBlock Text="常规设置" Style="{StaticResource SubtitleTextBlockStyle}" />
+
+            <!-- Dual-Target Smart Language Routing -->
+            <TextBlock Text="语言与文本预处理" Style="{StaticResource BodyStrongTextBlockStyle}" Margin="0,4,0,0" />
+            <Border Style="{StaticResource PopTranslateSettingsCardStyle}">
+                <StackPanel Spacing="14">
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="首选目标语言" FontWeight="SemiBold" />
+                            <TextBlock
+                                Text="外语文本默认翻译为此语言（如英文、日文 → 简体中文）"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                TextWrapping="Wrap" />
+                        </StackPanel>
+                        <ComboBox
+                            Grid.Column="1"
+                            MinWidth="210"
+                            VerticalAlignment="Center"
+                            DisplayMemberPath="DisplayLabel"
+                            ItemsSource="{x:Bind ViewModel.TargetLanguages, Mode=OneWay}"
+                            SelectedItem="{x:Bind ViewModel.PrimaryTargetLanguage, Mode=TwoWay}" />
+                    </Grid>
+
+                    <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="第二目标语言（双语自动互译）" FontWeight="SemiBold" />
+                            <TextBlock
+                                Text="当检测到源文本已属于首选目标语言时，自动路由到此语言（如中文 → 英文）"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                TextWrapping="Wrap" />
+                        </StackPanel>
+                        <ComboBox
+                            Grid.Column="1"
+                            MinWidth="210"
+                            VerticalAlignment="Center"
+                            DisplayMemberPath="DisplayLabel"
+                            ItemsSource="{x:Bind ViewModel.TargetLanguages, Mode=OneWay}"
+                            SelectedItem="{x:Bind ViewModel.SecondaryTargetLanguage, Mode=TwoWay}" />
+                    </Grid>
+
+                    <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="默认开启 PDF / OCR 智能合并换行" FontWeight="SemiBold" />
+                            <TextBlock
+                                Text="自动去除论文 PDF 复制或截图 OCR 产生的多余硬换行与英文断词连字符，保留自然段与列表"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                TextWrapping="Wrap" />
+                        </StackPanel>
+                        <ToggleSwitch
+                            Grid.Column="1"
+                            OnContent="开启"
+                            OffContent="关闭"
+                            IsOn="{x:Bind ViewModel.MergePdfLineBreaks, Mode=TwoWay}" />
+                    </Grid>
+
+                    <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="翻译完成后自动回译" FontWeight="SemiBold" />
+                            <TextBlock
+                                Text="每张翻译卡片完成后，自动使用同一翻译服务反向回译为源语言以验证语义准确性"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                TextWrapping="Wrap" />
+                        </StackPanel>
+                        <ToggleSwitch
+                            Grid.Column="1"
+                            OnContent="开启"
+                            OffContent="关闭"
+                            IsOn="{x:Bind ViewModel.AutoBackTranslate, Mode=TwoWay}" />
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <!-- Text Polish Defaults -->
+            <TextBlock Text="文本润色默认设置" Style="{StaticResource BodyStrongTextBlockStyle}" Margin="0,8,0,0" />
+            <Border Style="{StaticResource PopTranslateSettingsCardStyle}">
+                <StackPanel Spacing="14">
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="默认润色风格" FontWeight="SemiBold" />
+                            <TextBlock
+                                Text="通过快捷键或托盘菜单进入润色模式时默认选中的风格预设（仅运行已启用的 OpenAI 兼容大模型）"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                TextWrapping="Wrap" />
+                        </StackPanel>
+                        <ComboBox
+                            Grid.Column="1"
+                            MinWidth="210"
+                            VerticalAlignment="Center"
+                            DisplayMemberPath="DisplayLabel"
+                            ItemsSource="{x:Bind ViewModel.PolishStyles, Mode=OneWay}"
+                            SelectedItem="{x:Bind ViewModel.DefaultPolishStyle, Mode=TwoWay}" />
+                    </Grid>
+
+                    <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="润色默认开启对比高亮" FontWeight="SemiBold" />
+                            <TextBlock
+                                Text="润色结果卡片默认以本地 Diff 高亮展示删减（红色删除线）与新增（绿色）修改差异，零额外 Token 消耗"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                TextWrapping="Wrap" />
+                        </StackPanel>
+                        <ToggleSwitch
+                            Grid.Column="1"
+                            OnContent="开启"
+                            OffContent="关闭"
+                            IsOn="{x:Bind ViewModel.ShowPolishDiffByDefault, Mode=TwoWay}" />
+                    </Grid>
+
+                    <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+                    <StackPanel Spacing="8">
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
+                                <TextBlock Text="自定义润色 Prompt" FontWeight="SemiBold" />
+                                <TextBlock
+                                    Text="当润色风格选择「自定义」时作为默认系统提示词发送给大模型（也可在弹窗内临时微调）"
+                                    Style="{StaticResource CaptionTextBlockStyle}"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    TextWrapping="Wrap" />
+                            </StackPanel>
+                            <Button
+                                Grid.Column="1"
+                                Content="恢复默认 Prompt"
+                                Padding="10,4"
+                                FontSize="12"
+                                VerticalAlignment="Center"
+                                Command="{x:Bind ViewModel.ResetDefaultCustomPromptCommand}" />
+                        </Grid>
+
+                        <TextBox
+                            AcceptsReturn="True"
+                            TextWrapping="Wrap"
+                            MinHeight="88"
+                            MaxHeight="180"
+                            ScrollViewer.VerticalScrollBarVisibility="Auto"
+                            PlaceholderText="输入自定义润色系统提示词..."
+                            Text="{x:Bind ViewModel.CustomPolishPrompt, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <!-- Translation Popup Window Behavior -->
+            <TextBlock Text="翻译弹窗行为" Style="{StaticResource BodyStrongTextBlockStyle}" Margin="0,8,0,0" />
+            <Border Style="{StaticResource PopTranslateSettingsCardStyle}">
+                <StackPanel Spacing="14">
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="弹窗出现位置" FontWeight="SemiBold" />
+                            <TextBlock
+                                Text="支持多显示器不同 DPI 屏幕防裁切跟随，或固定在上次拖动位置"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                TextWrapping="Wrap" />
+                        </StackPanel>
+                        <ComboBox
+                            Grid.Column="1"
+                            MinWidth="210"
+                            SelectedIndex="{x:Bind ViewModel.PositionModeIndex, Mode=TwoWay}">
+                            <ComboBoxItem Content="跟随鼠标位置（智能防裁切）" />
+                            <ComboBoxItem Content="记住上次固定位置" />
+                        </ComboBox>
+                    </Grid>
+
+                    <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="弹窗宽度与最大高度（DIPs）" FontWeight="SemiBold" />
+                            <TextBlock
+                                Text="弹窗高度随翻译结果自动伸缩，超过最大高度后内部平滑滚动"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                            <NumberBox
+                                Header="宽度"
+                                Width="110"
+                                Minimum="340"
+                                Maximum="760"
+                                SmallChange="20"
+                                SpinButtonPlacementMode="Compact"
+                                Value="{x:Bind ViewModel.PopupWidth, Mode=TwoWay}" />
+                            <NumberBox
+                                Header="最大高度"
+                                Width="110"
+                                Minimum="300"
+                                Maximum="1000"
+                                SmallChange="40"
+                                SpinButtonPlacementMode="Compact"
+                                Value="{x:Bind ViewModel.PopupMaxHeight, Mode=TwoWay}" />
+                        </StackPanel>
+                    </Grid>
+
+                    <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="点击窗口外部自动隐藏" FontWeight="SemiBold" />
+                            <TextBlock
+                                Text="未置顶时，点击桌面或其他应用立即收起弹窗"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        </StackPanel>
+                        <ToggleSwitch
+                            Grid.Column="1"
+                            OnContent="开启"
+                            OffContent="关闭"
+                            IsOn="{x:Bind ViewModel.HideOnClickOutside, Mode=TwoWay}" />
+                    </Grid>
+
+                    <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="按 Esc 隐藏弹窗并取消请求" FontWeight="SemiBold" />
+                            <TextBlock
+                                Text="快速关闭弹窗并立即中止未完成的流式翻译请求"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        </StackPanel>
+                        <ToggleSwitch
+                            Grid.Column="1"
+                            OnContent="开启"
+                            OffContent="关闭"
+                            IsOn="{x:Bind ViewModel.HideOnEscape, Mode=TwoWay}" />
+                    </Grid>
+
+                    <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="默认置顶弹窗" FontWeight="SemiBold" />
+                            <TextBlock
+                                Text="打开翻译弹窗时默认保持置顶且不因失焦隐藏"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        </StackPanel>
+                        <ToggleSwitch
+                            Grid.Column="1"
+                            OnContent="开启"
+                            OffContent="关闭"
+                            IsOn="{x:Bind ViewModel.PinByDefault, Mode=TwoWay}" />
+                    </Grid>
+
+                    <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="自动复制首个完成的译文" FontWeight="SemiBold" />
+                            <TextBlock
+                                Text="并行翻译中第一个服务完成时自动写入剪贴板"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        </StackPanel>
+                        <ToggleSwitch
+                            Grid.Column="1"
+                            OnContent="开启"
+                            OffContent="关闭"
+                            IsOn="{x:Bind ViewModel.AutoCopyFirstResult, Mode=TwoWay}" />
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <!-- Appearance & Standard Startup -->
+            <TextBlock Text="外观与开机启动" Style="{StaticResource BodyStrongTextBlockStyle}" Margin="0,8,0,0" />
+            <Border Style="{StaticResource PopTranslateSettingsCardStyle}">
+                <StackPanel Spacing="14">
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="应用主题" FontWeight="SemiBold" />
+                            <TextBlock
+                                Text="同时应用于 Desktop Acrylic 翻译弹窗与 Mica 设置窗口"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        </StackPanel>
+                        <ComboBox
+                            Grid.Column="1"
+                            MinWidth="210"
+                            SelectedIndex="{x:Bind ViewModel.ThemeModeIndex, Mode=TwoWay}">
+                            <ComboBoxItem Content="跟随 Windows 系统主题" />
+                            <ComboBoxItem Content="浅色 (Light)" />
+                            <ComboBoxItem Content="深色 (Dark)" />
+                        </ComboBox>
+                    </Grid>
+
+                    <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="开机自动启动（标准用户 HKCU）" FontWeight="SemiBold" />
+                            <TextBlock
+                                Text="登录 Windows 时自动静默常驻托盘；如需免 UAC 管理员提权自启，请前往「网络与权限」页配置"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                TextWrapping="Wrap" />
+                        </StackPanel>
+                        <ToggleSwitch
+                            Grid.Column="1"
+                            OnContent="开启"
+                            OffContent="关闭"
+                            IsOn="{x:Bind ViewModel.LaunchAtStartup, Mode=TwoWay}" />
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <TextBlock
+                Visibility="{x:Bind ViewModel.StatusMessage, Mode=OneWay, Converter={StaticResource StringNotEmptyToVisibilityConverter}}"
+                Text="{x:Bind ViewModel.StatusMessage, Mode=OneWay}"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                FontSize="12" />
+        </StackPanel>
+    </ScrollViewer>
+</Page>
