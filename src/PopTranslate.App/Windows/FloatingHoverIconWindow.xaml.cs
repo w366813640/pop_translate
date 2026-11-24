@@ -12,17 +12,12 @@ namespace PopTranslate.App.Windows;
 
 public sealed partial class FloatingHoverIconWindow : WindowEx
 {
-    private const double CompactWidthDips = 34;
-    private const double ExpandedWidthDips = 72;
-    private const double PillHeightDips = 34;
+    private const double IconSizeDips = 34;
 
     private readonly IWindowHelperService _windowHelperService;
     private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _autoHideTimer;
-    private nint _hwnd;
-    private ScreenPoint _currentPosPx;
-    private double _currentScale = 1.0;
+    private readonly nint _hwnd;
     private string? _sourceProcessName;
-    private bool _isExpanded;
     private bool _isPointerHovering;
     private bool _isContextMenuOpen;
     private bool _isVisible;
@@ -62,7 +57,6 @@ public sealed partial class FloatingHoverIconWindow : WindowEx
 
     public event EventHandler? IconClicked;
     public event EventHandler? TranslateClicked;
-    public event EventHandler? PolishClicked;
     public event EventHandler<string>? BlacklistProcessRequested;
     public event EventHandler<TimeSpan>? MuteHoverRequested;
     public event EventHandler? DisableHoverIconRequested;
@@ -76,7 +70,6 @@ public sealed partial class FloatingHoverIconWindow : WindowEx
     public void PreWarm()
     {
         ConfigureWindowChrome();
-        SetExpandedVisualState(expanded: false);
         AppWindow.Hide();
         _isVisible = false;
     }
@@ -85,14 +78,12 @@ public sealed partial class FloatingHoverIconWindow : WindowEx
     {
         _sourceProcessName = NormalizeProcessDisplayName(sourceProcessName);
         UpdateContextMenuProcessItem();
-        SetExpandedVisualState(expanded: false);
 
         var monitor = _windowHelperService.GetMonitorAtPoint(anchorPoint);
         var scale = monitor.DpiScale > 0 ? monitor.DpiScale : 1.0;
-        _currentScale = scale;
 
-        var widthPx = Math.Max(28, (int)Math.Ceiling(CompactWidthDips * scale));
-        var heightPx = Math.Max(28, (int)Math.Ceiling(PillHeightDips * scale));
+        var widthPx = Math.Max(28, (int)Math.Ceiling(IconSizeDips * scale));
+        var heightPx = Math.Max(28, (int)Math.Ceiling(IconSizeDips * scale));
         var cursorOffsetPx = Math.Max(8, (int)Math.Round(14 * scale));
 
         var pos = _windowHelperService.CalculateClampedWindowPosition(
@@ -100,7 +91,6 @@ public sealed partial class FloatingHoverIconWindow : WindowEx
             widthPx,
             heightPx,
             cursorOffsetPx: cursorOffsetPx);
-        _currentPosPx = pos;
 
         _windowHelperService.ConfigureNoActivateOverlayWindow(_hwnd);
         _windowHelperService.MoveAndResizeWindow(_hwnd, pos.X, pos.Y, widthPx, heightPx, activate: false);
@@ -120,8 +110,6 @@ public sealed partial class FloatingHoverIconWindow : WindowEx
             HoverContextFlyout.Hide();
         }
 
-        SetExpandedVisualState(expanded: false);
-
         if (!_isVisible && !AppWindow.IsVisible)
         {
             return;
@@ -129,55 +117,6 @@ public sealed partial class FloatingHoverIconWindow : WindowEx
 
         _isVisible = false;
         AppWindow.Hide();
-    }
-
-    private void ExpandPillToDualActions()
-    {
-        if (_isExpanded || !_isVisible)
-        {
-            return;
-        }
-
-        SetExpandedVisualState(expanded: true);
-
-        var scale = _currentScale > 0 ? _currentScale : _windowHelperService.GetDpiScaleForWindow(_hwnd);
-        if (scale <= 0)
-        {
-            scale = 1.0;
-        }
-
-        var expandedWidthPx = Math.Max(56, (int)Math.Ceiling(ExpandedWidthDips * scale));
-        var heightPx = Math.Max(28, (int)Math.Ceiling(PillHeightDips * scale));
-
-        var targetX = _currentPosPx.X;
-        var targetY = _currentPosPx.Y;
-
-        var monitor = _windowHelperService.GetMonitorAtPoint(_currentPosPx);
-        var work = monitor.WorkArea;
-        if (!work.IsEmpty && targetX + expandedWidthPx > work.Right)
-        {
-            targetX = Math.Max(work.X, work.Right - expandedWidthPx);
-        }
-
-        _currentPosPx = new ScreenPoint(targetX, targetY);
-        _windowHelperService.MoveAndResizeWindow(_hwnd, targetX, targetY, expandedWidthPx, heightPx, activate: false);
-    }
-
-    private void SetExpandedVisualState(bool expanded)
-    {
-        _isExpanded = expanded;
-        if (expanded)
-        {
-            PolishColumn.Width = new GridLength(1, GridUnitType.Star);
-            ActionDivider.Visibility = Visibility.Visible;
-            PolishActionButton.Visibility = Visibility.Visible;
-        }
-        else
-        {
-            PolishColumn.Width = new GridLength(0, GridUnitType.Pixel);
-            ActionDivider.Visibility = Visibility.Collapsed;
-            PolishActionButton.Visibility = Visibility.Collapsed;
-        }
     }
 
     private void UpdateContextMenuProcessItem()
@@ -254,12 +193,6 @@ public sealed partial class FloatingHoverIconWindow : WindowEx
         IconClicked?.Invoke(this, EventArgs.Empty);
     }
 
-    private void PolishActionButton_Click(object sender, RoutedEventArgs e)
-    {
-        HideIcon();
-        PolishClicked?.Invoke(this, EventArgs.Empty);
-    }
-
     private void BlacklistCurrentAppMenuItem_Click(object sender, RoutedEventArgs e)
     {
         var processName = _sourceProcessName;
@@ -301,7 +234,6 @@ public sealed partial class FloatingHoverIconWindow : WindowEx
     {
         _isPointerHovering = true;
         _autoHideTimer.Stop();
-        ExpandPillToDualActions();
     }
 
     private void RootGrid_PointerExited(object sender, PointerRoutedEventArgs e)

@@ -19,8 +19,9 @@ namespace PopTranslate.App.Windows;
 
 public sealed partial class TranslationPopupWindow : WindowEx
 {
-    private const double MinPopupHeightDips = 230;
-    private const double MinPopupWidthDips = 340;
+    private const double DefaultFluentPopupWidthDips = 460;
+    private const double MinPopupHeightDips = 190;
+    private const double MinPopupWidthDips = 360;
     private const double MaxPopupWidthDips = 760;
     private static readonly TimeSpan HeightThrottleInterval = TimeSpan.FromMilliseconds(60);
 
@@ -33,10 +34,12 @@ public sealed partial class TranslationPopupWindow : WindowEx
     private bool _isProgrammaticResize;
     private bool _isResizeQueued;
     private bool _isManualHeightLocked;
+    private bool _isInternalFlyoutOpen;
     private int _targetProgrammaticHeightPx;
     private int _openDropDownCount;
     private DateTimeOffset _lastShownUtc = DateTimeOffset.MinValue;
     private DateTimeOffset _lastHeightUpdateUtc = DateTimeOffset.MinValue;
+    private DateTimeOffset _lastFlyoutActivityUtc = DateTimeOffset.MinValue;
 
     // Borderless toolbar drag tracking (physical screen pixels)
     private bool _isDraggingToolbar;
@@ -117,6 +120,11 @@ public sealed partial class TranslationPopupWindow : WindowEx
     public void ApplySettings(AppSettings settings, bool applySessionDefaults = false)
     {
         _behaviorConfig = settings.Window.Clone();
+        if (Math.Abs(_behaviorConfig.PopupWidth - 440) < 1)
+        {
+            _behaviorConfig.PopupWidth = DefaultFluentPopupWidthDips;
+        }
+
         AppAssetHelper.ApplyTheme(this, settings.Window.Theme);
         ViewModel.ApplySettings(settings, applySessionDefaults);
         ApplyTopMostState(ViewModel.IsPinned);
@@ -127,7 +135,8 @@ public sealed partial class TranslationPopupWindow : WindowEx
         _heightThrottleTimer.Stop();
         _isManualHeightLocked = false;
 
-        var desiredWidthDips = Math.Clamp(_behaviorConfig.PopupWidth, MinPopupWidthDips, MaxPopupWidthDips);
+        var rawWidth = _behaviorConfig.PopupWidth > 0 ? _behaviorConfig.PopupWidth : DefaultFluentPopupWidthDips;
+        var desiredWidthDips = Math.Clamp(rawWidth, MinPopupWidthDips, MaxPopupWidthDips);
         var desiredHeightDips = CalculateDesiredHeightDips();
 
         var anchor = anchorPoint ?? _windowHelperService.GetCursorPosition();
@@ -135,7 +144,7 @@ public sealed partial class TranslationPopupWindow : WindowEx
         var scale = monitor.DpiScale > 0 ? monitor.DpiScale : 1.0;
 
         var widthPx = Math.Max(320, (int)Math.Ceiling(desiredWidthDips * scale));
-        var heightPx = Math.Max(200, (int)Math.Ceiling(desiredHeightDips * scale));
+        var heightPx = Math.Max(180, (int)Math.Ceiling(desiredHeightDips * scale));
         var cursorOffsetPx = Math.Max(8, (int)Math.Round(14 * scale));
 
         ScreenPoint targetPos;
@@ -197,6 +206,8 @@ public sealed partial class TranslationPopupWindow : WindowEx
         }
 
         _openDropDownCount = 0;
+        _isInternalFlyoutOpen = false;
+        ViewModel.ResetInternalFlyoutState();
         _isDraggingToolbar = false;
         _hasDraggedDistance = false;
         _isManualHeightLocked = false;
@@ -224,29 +235,109 @@ public sealed partial class TranslationPopupWindow : WindowEx
 
     private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is nameof(TranslationPopupViewModel.CurrentMode)
-            or nameof(TranslationPopupViewModel.IsTranslateMode)
-            or nameof(TranslationPopupViewModel.IsPolishMode))
+        if (e.PropertyName is nameof(TranslationPopupViewModel.IsSourceCardCollapsed)
+            or nameof(TranslationPopupViewModel.HasOcrContext)
+            or nameof(TranslationPopupViewModel.HasStatusBanner))
         {
-            Title = ViewModel.WindowTitle;
             ScheduleDynamicHeightUpdate();
         }
     }
 
-    private void TranslateModeButton_Click(object sender, RoutedEventArgs e)
+    private void SourceTextBox_GotFocus(object sender, RoutedEventArgs e)
     {
-        if (!ViewModel.IsTranslateMode && ViewModel.SelectTranslateModeCommand.CanExecute(null))
+        SourceFocusAccentBorder.Opacity = 1.0;
+    }
+
+    private void SourceTextBox_LostFocus(object sender, RoutedEventArgs e)
+    {
+        SourceFocusAccentBorder.Opacity = 0.5;
+    }
+
+    private void SourceLangMenuFlyout_Opening(object? sender, object e)
+    {
+        MarkInternalFlyoutOpened();
+
+        SourceLangMenuFlyout.Items.Clear();
+        var selectedCode = ViewModel.SelectedSourceLanguage?.Code ?? LanguageCode.Auto;
+
+        foreach (var option in ViewModel.SourceLanguageOptions)
         {
-            ViewModel.SelectTranslateModeCommand.Execute(null);
+            var captured = option;
+            var item = new ToggleMenuFlyoutItem
+            {
+                Text = option.DisplayLabel,
+                IsChecked = option.Code == selectedCode,
+            };
+            item.Click += (_, _) => ViewModel.SelectedSourceLanguage = captured;
+            SourceLangMenuFlyout.Items.Add(item);
         }
     }
 
-    private void PolishModeButton_Click(object sender, RoutedEventArgs e)
+    private void TargetLangMenuFlyout_Opening(object? sender, object e)
     {
-        if (!ViewModel.IsPolishMode && ViewModel.SelectPolishModeCommand.CanExecute(null))
+        MarkInternalFlyoutOpened();
+
+        TargetLangMenuFlyout.Items.Clear();
+        var selectedCode = ViewModel.SelectedTargetLanguage?.Code ?? LanguageCode.Auto;
+
+        foreach (var option in ViewModel.TargetLanguageOptions)
         {
-            ViewModel.SelectPolishModeCommand.Execute(null);
+            var captured = option;
+            var item = new ToggleMenuFlyoutItem
+            {
+                Text = option.DisplayLabel,
+                IsChecked = option.Code == selectedCode,
+            };
+            item.Click += (_, _) => ViewModel.SelectedTargetLanguage = captured;
+            TargetLangMenuFlyout.Items.Add(item);
         }
+    }
+
+    private void OcrModeMenuFlyout_Opening(object? sender, object e)
+    {
+        MarkInternalFlyoutOpened();
+
+        OcrModeMenuFlyout.Items.Clear();
+        var selectedMode = ViewModel.SelectedOcrPromptMode?.Mode ?? OcrPromptMode.PlainText;
+
+        foreach (var option in ViewModel.OcrPromptModeOptions)
+        {
+            var captured = option;
+            var item = new ToggleMenuFlyoutItem
+            {
+                Text = option.DisplayLabel,
+                IsChecked = option.Mode == selectedMode,
+            };
+            item.Click += (_, _) => ViewModel.SelectedOcrPromptMode = captured;
+            OcrModeMenuFlyout.Items.Add(item);
+        }
+    }
+
+    private void MarkInternalFlyoutOpened()
+    {
+        _openDropDownCount++;
+        _isInternalFlyoutOpen = true;
+        _lastFlyoutActivityUtc = DateTimeOffset.UtcNow;
+        ViewModel.NotifyInternalFlyoutOpened();
+    }
+
+    private void InternalFlyout_Closed(object? sender, object e)
+    {
+        _openDropDownCount = Math.Max(0, _openDropDownCount - 1);
+        _isInternalFlyoutOpen = _openDropDownCount > 0;
+        _lastFlyoutActivityUtc = DateTimeOffset.UtcNow;
+        ViewModel.NotifyInternalFlyoutClosed();
+    }
+
+    private bool IsAnyInternalFlyoutOrPopupOpen()
+    {
+        var now = DateTimeOffset.UtcNow;
+        return _isInternalFlyoutOpen ||
+               _openDropDownCount > 0 ||
+               ViewModel.HasOpenInternalFlyout ||
+               (now - _lastFlyoutActivityUtc).TotalMilliseconds < 220 ||
+               (now - ViewModel.LastFlyoutActivityUtc).TotalMilliseconds < 220 ||
+               HasOpenInternalPopups();
     }
 
     private void ClosePopupButton_Click(object sender, RoutedEventArgs e)
@@ -348,7 +439,7 @@ public sealed partial class TranslationPopupWindow : WindowEx
 
         var desiredHeightDips = CalculateDesiredHeightDips();
         var currentSizePx = AppWindow.Size;
-        var targetHeightPx = Math.Max(200, (int)Math.Ceiling(desiredHeightDips * scale));
+        var targetHeightPx = Math.Max(180, (int)Math.Ceiling(desiredHeightDips * scale));
 
         if (Math.Abs(currentSizePx.Height - targetHeightPx) < 4)
         {
@@ -390,16 +481,19 @@ public sealed partial class TranslationPopupWindow : WindowEx
     {
         var maxHeightDips = Math.Clamp(_behaviorConfig.PopupMaxHeight, 300, 1000);
 
-        // Measure current child heights safely; fallback to comfortable compact height before first layout pass.
-        var toolbarH = TopToolbarGrid.ActualHeight > 0 ? TopToolbarGrid.ActualHeight : 40;
-        var subToolbarH = SubToolbarContainer.ActualHeight > 0 ? SubToolbarContainer.ActualHeight : 36;
-        var sourceH = SourceCardBorder.ActualHeight > 0 ? SourceCardBorder.ActualHeight + 10 : 108;
+        var toolbarH = TopToolbarGrid.ActualHeight > 0 ? TopToolbarGrid.ActualHeight : 54;
+        var fallbackSourceH = ViewModel.IsSourceCardCollapsed ? 50 : 122;
+        var sourceH = SourceSectionPanel.ActualHeight > 0
+            ? SourceSectionPanel.ActualHeight + 12
+            : fallbackSourceH;
         var bannerH = StatusBannerBorder.Visibility == Visibility.Visible && StatusBannerBorder.ActualHeight > 0
-            ? StatusBannerBorder.ActualHeight + 8
+            ? StatusBannerBorder.ActualHeight + 10
             : 0;
-        var cardsH = CardsContentPanel.ActualHeight > 0 ? CardsContentPanel.ActualHeight + 16 : 64;
+        var cardsH = CardsContentPanel.ActualHeight > 0
+            ? CardsContentPanel.ActualHeight + 16
+            : 64;
 
-        var total = toolbarH + subToolbarH + sourceH + bannerH + cardsH + 8;
+        var total = toolbarH + sourceH + bannerH + cardsH + 6;
         return Math.Clamp(total, MinPopupHeightDips, maxHeightDips);
     }
 
@@ -431,8 +525,8 @@ public sealed partial class TranslationPopupWindow : WindowEx
             return;
         }
 
-        // Guard against spurious deactivation immediately after show or while ComboBox/Flyout popups are open.
-        if (_openDropDownCount > 0 || (DateTimeOffset.UtcNow - _lastShownUtc).TotalMilliseconds < 180)
+        // Guard against spurious deactivation immediately after show or while any MenuFlyout is open.
+        if (IsAnyInternalFlyoutOrPopupOpen() || (DateTimeOffset.UtcNow - _lastShownUtc).TotalMilliseconds < 180)
         {
             return;
         }
@@ -445,7 +539,7 @@ public sealed partial class TranslationPopupWindow : WindowEx
         _isInternalDeactivationCheckPending = true;
         _ = Task.Run(async () =>
         {
-            await Task.Delay(70);
+            await Task.Delay(80);
             DispatcherQueue.TryEnqueue(() =>
             {
                 _isInternalDeactivationCheckPending = false;
@@ -454,7 +548,7 @@ public sealed partial class TranslationPopupWindow : WindowEx
                     return;
                 }
 
-                if (_openDropDownCount > 0 || HasOpenInternalPopups())
+                if (IsAnyInternalFlyoutOrPopupOpen())
                 {
                     return;
                 }
@@ -514,19 +608,9 @@ public sealed partial class TranslationPopupWindow : WindowEx
         ScheduleDynamicHeightUpdate();
     }
 
-    private void LanguageComboBox_DropDownOpened(object? sender, object e)
-    {
-        _openDropDownCount++;
-    }
-
-    private void LanguageComboBox_DropDownClosed(object? sender, object e)
-    {
-        _openDropDownCount = Math.Max(0, _openDropDownCount - 1);
-    }
-
     private void RootContainer_PreviewKeyDown(object sender, KeyRoutedEventArgs e)
     {
-        if (e.Key == VirtualKey.Escape && _behaviorConfig.HideOnEscape && _openDropDownCount == 0 && !HasOpenInternalPopups())
+        if (e.Key == VirtualKey.Escape && _behaviorConfig.HideOnEscape && !IsAnyInternalFlyoutOrPopupOpen())
         {
             e.Handled = true;
             HidePopup();
@@ -565,14 +649,6 @@ public sealed partial class TranslationPopupWindow : WindowEx
             return;
         }
 
-        // Ctrl + Tab: Toggle Translate / Polish mode
-        if (ctrlDown && !altDown && e.Key == VirtualKey.Tab)
-        {
-            ViewModel.ToggleMode();
-            e.Handled = true;
-            return;
-        }
-
         // Ctrl + P: Toggle Pin
         if (ctrlDown && !shiftDown && !altDown && e.Key == VirtualKey.P)
         {
@@ -581,10 +657,18 @@ public sealed partial class TranslationPopupWindow : WindowEx
             return;
         }
 
+        // Alt + P: Trigger Polish cards immediately if popup is already open
+        if (altDown && !ctrlDown && !shiftDown && e.Key == VirtualKey.P)
+        {
+            _ = ViewModel.TriggerAllPolishCardsAsync();
+            e.Handled = true;
+            return;
+        }
+
         // Alt + S: Swap Source & Target languages
         if (altDown && !ctrlDown && !shiftDown && e.Key == VirtualKey.S)
         {
-            if (ViewModel.IsTranslateMode && ViewModel.SwapLanguagesCommand.CanExecute(null))
+            if (ViewModel.SwapLanguagesCommand.CanExecute(null))
             {
                 ViewModel.SwapLanguagesCommand.Execute(null);
                 e.Handled = true;
@@ -630,7 +714,7 @@ public sealed partial class TranslationPopupWindow : WindowEx
             return;
         }
 
-        if (e.Key == VirtualKey.Escape && _behaviorConfig.HideOnEscape)
+        if (e.Key == VirtualKey.Escape && _behaviorConfig.HideOnEscape && !IsAnyInternalFlyoutOrPopupOpen())
         {
             e.Handled = true;
             HidePopup();
@@ -653,7 +737,7 @@ public sealed partial class TranslationPopupWindow : WindowEx
                 return;
             }
 
-            // Enter or Ctrl+Enter executes current mode immediately; Shift+Enter inserts a newline.
+            // Enter or Ctrl+Enter executes immediately; Shift+Enter inserts a newline.
             if (!shiftDown || ctrlDown)
             {
                 e.Handled = true;
@@ -661,30 +745,6 @@ public sealed partial class TranslationPopupWindow : WindowEx
                 {
                     ViewModel.RetranslateCommand.Execute(null);
                 }
-            }
-        }
-    }
-
-    private void CustomPolishPromptTextBox_PreviewKeyDown(object sender, KeyRoutedEventArgs e)
-    {
-        if (e.Handled)
-        {
-            return;
-        }
-
-        if (e.Key == VirtualKey.Escape && _behaviorConfig.HideOnEscape)
-        {
-            e.Handled = true;
-            HidePopup();
-            return;
-        }
-
-        if (e.Key == VirtualKey.Enter && !IsModifierDown(VirtualKey.Shift))
-        {
-            e.Handled = true;
-            if (ViewModel.HasSourceText && ViewModel.RetranslateCommand.CanExecute(null))
-            {
-                ViewModel.RetranslateCommand.Execute(null);
             }
         }
     }

@@ -41,11 +41,7 @@ public sealed class PolishOrchestrator : IPolishOrchestrator
     }
 
     public IReadOnlyList<ProviderInstanceConfig> GetEligibleProviders() =>
-        (_settingsStore.Current.Providers ?? [])
-            .Where(p => p is not null && p.Enabled && _providers.ContainsKey(p.Kind))
-            .OrderBy(p => p.SortOrder)
-            .Select(p => p.Clone())
-            .ToList();
+        ResolveDefaultPolishProviders(_settingsStore.Current.Providers ?? []);
 
     public IAsyncEnumerable<ProviderStreamUpdate> PolishParallelAsync(
         PolishRequest request,
@@ -139,6 +135,7 @@ public sealed class PolishOrchestrator : IPolishOrchestrator
                 () => ExecuteProviderAsync(
                     capturedInstance,
                     prepared.EffectiveRequest,
+                    prepared.AllowInstanceCustomPromptFallback,
                     prepared.InitialDetected,
                     prepared.TargetLanguage,
                     channel.Writer,
@@ -209,8 +206,10 @@ public sealed class PolishOrchestrator : IPolishOrchestrator
             }
         }
 
-        var resolvedCustomPrompt = request.Style == PolishStyle.Custom && string.IsNullOrWhiteSpace(request.CustomPrompt)
-            ? (settings.Polish?.CustomPrompt ?? PolishConfig.DefaultCustomPrompt)
+        var hasExplicitCustomPrompt = !string.IsNullOrWhiteSpace(request.CustomPrompt);
+        var globalCustomPrompt = settings.Polish?.CustomPrompt ?? PolishConfig.DefaultCustomPrompt;
+        var resolvedCustomPrompt = request.Style == PolishStyle.Custom && !hasExplicitCustomPrompt
+            ? globalCustomPrompt
             : request.CustomPrompt;
 
         var effectiveLanguage = request.PreferredLanguage is { IsAuto: false } preferred
@@ -234,26 +233,55 @@ public sealed class PolishOrchestrator : IPolishOrchestrator
         {
             var idSet = new HashSet<string>(requestedIds, StringComparer.Ordinal);
             selected = providersList
-                .Where(p => p is not null && idSet.Contains(p.Id) && _providers.ContainsKey(p.Kind))
+                .Where(p => p is not null
+                    && idSet.Contains(p.Id)
+                    && p.Kind == ProviderKind.OpenAiCompatible
+                    && _providers.ContainsKey(p.Kind))
                 .OrderBy(p => p.SortOrder)
                 .Select(p => p.Clone())
                 .ToList();
         }
         else
         {
-            selected = providersList
-                .Where(p => p is not null && p.Enabled && _providers.ContainsKey(p.Kind))
-                .OrderBy(p => p.SortOrder)
-                .Select(p => p.Clone())
-                .ToList();
+            selected = ResolveDefaultPolishProviders(providersList);
         }
 
-        return new PreparedPolishExecution(effectiveRequest, initialDetected, effectiveLanguage, selected);
+        var allowInstanceCustomPromptFallback =
+            !hasExplicitCustomPrompt ||
+            string.Equals(request.CustomPrompt, globalCustomPrompt, StringComparison.Ordinal);
+
+        return new PreparedPolishExecution(
+            effectiveRequest,
+            initialDetected,
+            effectiveLanguage,
+            selected,
+            allowInstanceCustomPromptFallback);
+    }
+
+    private List<ProviderInstanceConfig> ResolveDefaultPolishProviders(IReadOnlyList<ProviderInstanceConfig> providersList)
+    {
+        var enabledOpenAi = providersList
+            .Where(p => p is not null
+                && p.Enabled
+                && p.Kind == ProviderKind.OpenAiCompatible
+                && _providers.ContainsKey(p.Kind))
+            .OrderBy(p => p.SortOrder)
+            .ToList();
+
+        var dedicatedPolish = enabledOpenAi
+            .Where(p => p.Role == ProviderRole.Polish)
+            .ToList();
+
+        var activeList = dedicatedPolish.Count > 0 ? dedicatedPolish : enabledOpenAi;
+        return activeList
+            .Select(p => p.Clone())
+            .ToList();
     }
 
     private async Task ExecuteProviderAsync(
         ProviderInstanceConfig instance,
         PolishRequest effectiveRequest,
+        bool allowInstanceCustomPromptFallback,
         LanguageCode? initialDetected,
         LanguageCode targetLanguage,
         ChannelWriter<ProviderStreamUpdate> writer,
@@ -280,6 +308,16 @@ public sealed class PolishOrchestrator : IPolishOrchestrator
             return;
         }
 
+        var providerRequest = effectiveRequest;
+        if (effectiveRequest.Style == PolishStyle.Custom &&
+            allowInstanceCustomPromptFallback &&
+            instance.Role == ProviderRole.Polish &&
+            !string.IsNullOrWhiteSpace(instance.SystemPrompt) &&
+            !string.Equals(instance.SystemPrompt.Trim(), ProviderInstanceConfig.DefaultOpenAiSystemPrompt, StringComparison.Ordinal))
+        {
+            providerRequest = effectiveRequest with { CustomPrompt = instance.SystemPrompt.Trim() };
+        }
+
         try
         {
             string? chunkError = null;
@@ -287,7 +325,7 @@ public sealed class PolishOrchestrator : IPolishOrchestrator
             if (provider is IReasoningPolishProvider reasoningProvider)
             {
                 await foreach (var item in reasoningProvider
-                    .PolishReasoningStreamAsync(effectiveRequest, instance, cancellationToken)
+                    .PolishReasoningStreamAsync(providerRequest, instance, cancellationToken)
                     .ConfigureAwait(false))
                 {
                     var chunk = item.Chunk;
@@ -344,7 +382,7 @@ public sealed class PolishOrchestrator : IPolishOrchestrator
             }
             else
             {
-                await foreach (var chunk in provider.PolishStreamAsync(effectiveRequest, instance, cancellationToken).ConfigureAwait(false))
+                await foreach (var chunk in provider.PolishStreamAsync(providerRequest, instance, cancellationToken).ConfigureAwait(false))
                 {
                     if (chunk.DetectedSourceLanguage is { IsAuto: false } chunkDetected)
                     {
@@ -464,5 +502,6 @@ public sealed class PolishOrchestrator : IPolishOrchestrator
         PolishRequest EffectiveRequest,
         LanguageCode? InitialDetected,
         LanguageCode TargetLanguage,
-        List<ProviderInstanceConfig> SelectedProviders);
+        List<ProviderInstanceConfig> SelectedProviders,
+        bool AllowInstanceCustomPromptFallback);
 }

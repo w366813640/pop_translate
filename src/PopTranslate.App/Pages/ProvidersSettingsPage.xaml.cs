@@ -24,6 +24,14 @@ public sealed partial class ProvidersSettingsPage : Page
         }
     }
 
+    private void AddPolishProvider_Click(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.AddPolishProviderCommand.CanExecute(null))
+        {
+            ViewModel.AddPolishProviderCommand.Execute(null);
+        }
+    }
+
     private void AddLlmPreset_Click(object sender, RoutedEventArgs e)
     {
         if (sender is FrameworkElement { Tag: string presetKey } &&

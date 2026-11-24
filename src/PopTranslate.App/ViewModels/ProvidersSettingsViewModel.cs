@@ -12,6 +12,9 @@ public sealed partial class ProviderItemViewModel : ObservableObject
 {
     private readonly Action<ProviderItemViewModel> _enabledChangedCallback;
     private bool _suppressEnabledCallback;
+    private int _roleIndex;
+    private int _triggerModeIndex;
+    private int _defaultPolishStyleIndex;
 
     public ProviderItemViewModel(
         ProviderInstanceConfig config,
@@ -23,6 +26,9 @@ public sealed partial class ProviderItemViewModel : ObservableObject
 
         Id = config.Id;
         Kind = config.Kind;
+        _roleIndex = Kind == ProviderKind.OpenAiCompatible && config.Role == ProviderRole.Polish ? 1 : 0;
+        _triggerModeIndex = config.TriggerMode == PolishTriggerMode.OnDemand ? 1 : 0;
+        _defaultPolishStyleIndex = MapPolishStyleToIndex(config.DefaultPolishStyle);
         DisplayName = config.DisplayName;
         Enabled = config.Enabled;
         IsCollapsedByDefault = config.IsCollapsedByDefault;
@@ -31,7 +37,9 @@ public sealed partial class ProviderItemViewModel : ObservableObject
         Model = config.Model;
         ApiKeyPlaintext = decryptedApiKey;
         SystemPrompt = string.IsNullOrWhiteSpace(config.SystemPrompt)
-            ? ProviderInstanceConfig.DefaultOpenAiSystemPrompt
+            ? (_roleIndex == 1 && config.DefaultPolishStyle == PolishStyle.Custom
+                ? PolishConfig.DefaultCustomPrompt
+                : ProviderInstanceConfig.DefaultOpenAiSystemPrompt)
             : config.SystemPrompt;
         Temperature = config.Temperature;
         TimeoutSeconds = config.TimeoutSeconds;
@@ -45,25 +53,111 @@ public sealed partial class ProviderItemViewModel : ObservableObject
 
     public ProviderKind Kind { get; }
 
-    public string KindLabel => Kind switch
-    {
-        ProviderKind.OpenAiCompatible => "OpenAI 兼容大模型 (流式)",
-        ProviderKind.DeepL => "DeepL API",
-        _ => "免费传统翻译 (零配置)",
-    };
+    public string KindLabel => IsPolishRole
+        ? "AI 文本润色服务 (流式)"
+        : Kind switch
+        {
+            ProviderKind.OpenAiCompatible => "OpenAI 兼容大模型 (流式)",
+            ProviderKind.DeepL => "DeepL API",
+            _ => "免费传统翻译 (零配置)",
+        };
 
-    public string BadgeText => Kind switch
-    {
-        ProviderKind.OpenAiCompatible => "LLM",
-        ProviderKind.DeepL => "DeepL",
-        _ => "免费",
-    };
+    public string BadgeText => IsPolishRole
+        ? "✨ 润色"
+        : Kind switch
+        {
+            ProviderKind.OpenAiCompatible => "LLM",
+            ProviderKind.DeepL => "DeepL",
+            _ => "免费",
+        };
 
     public bool IsOpenAi => Kind == ProviderKind.OpenAiCompatible;
 
     public bool IsDeepL => Kind == ProviderKind.DeepL;
 
     public bool IsFreeTraditional => Kind == ProviderKind.FreeTraditional;
+
+    public bool IsPolishRole => IsOpenAi && RoleIndex == 1;
+
+    public bool IsCustomPolishStyle => MapIndexToPolishStyle(DefaultPolishStyleIndex) == PolishStyle.Custom;
+
+    public bool ShowSystemPromptSection => IsOpenAi && (!IsPolishRole || IsCustomPolishStyle);
+
+    public bool ShowPresetPolishPromptHint => IsPolishRole && !IsCustomPolishStyle;
+
+    public string SystemPromptHeader => IsPolishRole
+        ? "自定义润色提示词 (Custom Prompt)"
+        : "系统提示词 (System Prompt)";
+
+    public string SystemPromptPlaceholder => IsPolishRole
+        ? "输入自定义润色要求（系统会自动保持原文语种输出，不进行跨语种翻译）"
+        : "支持 {source} 与 {target} 占位符";
+
+    public string SystemPromptHint => IsPolishRole
+        ? "提示：当前已选择「自定义 Prompt」风格，此提示词将直接作用于该润色服务卡片。"
+        : "提示：可使用 {source} 和 {target} 占位符自动注入检测到的源语言和目标语言。";
+
+    public int RoleIndex
+    {
+        get => _roleIndex;
+        set
+        {
+            if (value < 0)
+            {
+                return;
+            }
+
+            var normalized = IsOpenAi && value == 1 ? 1 : 0;
+            if (SetProperty(ref _roleIndex, normalized))
+            {
+                OnPropertyChanged(nameof(IsPolishRole));
+                OnPropertyChanged(nameof(BadgeText));
+                OnPropertyChanged(nameof(KindLabel));
+                OnPropertyChanged(nameof(ShowSystemPromptSection));
+                OnPropertyChanged(nameof(ShowPresetPolishPromptHint));
+                OnPropertyChanged(nameof(SystemPromptHeader));
+                OnPropertyChanged(nameof(SystemPromptPlaceholder));
+                OnPropertyChanged(nameof(SystemPromptHint));
+                SyncSystemPromptForRoleOrStyleChange();
+            }
+        }
+    }
+
+    public int TriggerModeIndex
+    {
+        get => _triggerModeIndex;
+        set
+        {
+            if (value < 0)
+            {
+                return;
+            }
+
+            var normalized = value == 1 ? 1 : 0;
+            SetProperty(ref _triggerModeIndex, normalized);
+        }
+    }
+
+    public int DefaultPolishStyleIndex
+    {
+        get => _defaultPolishStyleIndex;
+        set
+        {
+            if (value < 0)
+            {
+                return;
+            }
+
+            var normalized = Math.Clamp(value, 0, 6);
+            if (SetProperty(ref _defaultPolishStyleIndex, normalized))
+            {
+                OnPropertyChanged(nameof(IsCustomPolishStyle));
+                OnPropertyChanged(nameof(ShowSystemPromptSection));
+                OnPropertyChanged(nameof(ShowPresetPolishPromptHint));
+                SyncSystemPromptForRoleOrStyleChange();
+            }
+        }
+    }
 
     [ObservableProperty]
     public partial string DisplayName { get; set; } = string.Empty;
@@ -109,11 +203,59 @@ public sealed partial class ProviderItemViewModel : ObservableObject
         }
     }
 
+    private void SyncSystemPromptForRoleOrStyleChange()
+    {
+        if (_suppressEnabledCallback)
+        {
+            return;
+        }
+
+        if (IsPolishRole && IsCustomPolishStyle &&
+            string.Equals(SystemPrompt, ProviderInstanceConfig.DefaultOpenAiSystemPrompt, StringComparison.Ordinal))
+        {
+            SystemPrompt = PolishConfig.DefaultCustomPrompt;
+        }
+        else if ((!IsPolishRole || !IsCustomPolishStyle) &&
+                 string.Equals(SystemPrompt, PolishConfig.DefaultCustomPrompt, StringComparison.Ordinal))
+        {
+            SystemPrompt = ProviderInstanceConfig.DefaultOpenAiSystemPrompt;
+        }
+    }
+
+    public static int MapPolishStyleToIndex(PolishStyle style) => style switch
+    {
+        PolishStyle.General => 0,
+        PolishStyle.Academic => 1,
+        PolishStyle.Business => 2,
+        PolishStyle.Casual => 3,
+        PolishStyle.Concise => 4,
+        PolishStyle.CodeNaming => 5,
+        PolishStyle.Custom => 6,
+        _ => 0,
+    };
+
+    public static PolishStyle MapIndexToPolishStyle(int index) => index switch
+    {
+        0 => PolishStyle.General,
+        1 => PolishStyle.Academic,
+        2 => PolishStyle.Business,
+        3 => PolishStyle.Casual,
+        4 => PolishStyle.Concise,
+        5 => PolishStyle.CodeNaming,
+        6 => PolishStyle.Custom,
+        _ => PolishStyle.General,
+    };
+
     public ProviderInstanceConfig ToConfig(ISecretProtector secretProtector, int sortOrder) => new()
     {
         Id = Id,
         DisplayName = string.IsNullOrWhiteSpace(DisplayName) ? KindLabel : DisplayName.Trim(),
         Kind = Kind,
+        Role = IsPolishRole ? ProviderRole.Polish : ProviderRole.Translate,
+        TriggerMode = TriggerModeIndex == (int)PolishTriggerMode.OnDemand
+            ? PolishTriggerMode.OnDemand
+            : PolishTriggerMode.AutoParallel,
+        DefaultPolishStyle = MapIndexToPolishStyle(DefaultPolishStyleIndex),
         Enabled = Enabled,
         IsCollapsedByDefault = IsCollapsedByDefault,
         SortOrder = sortOrder,
@@ -123,7 +265,9 @@ public sealed partial class ProviderItemViewModel : ObservableObject
             ? string.Empty
             : secretProtector.Protect(ApiKeyPlaintext.Trim()),
         SystemPrompt = string.IsNullOrWhiteSpace(SystemPrompt)
-            ? ProviderInstanceConfig.DefaultOpenAiSystemPrompt
+            ? (IsPolishRole && IsCustomPolishStyle
+                ? PolishConfig.DefaultCustomPrompt
+                : ProviderInstanceConfig.DefaultOpenAiSystemPrompt)
             : SystemPrompt,
         Temperature = double.IsNaN(Temperature) ? 0.2 : Math.Clamp(Temperature, 0.0, 2.0),
         TimeoutSeconds = double.IsNaN(TimeoutSeconds) ? 30 : Math.Clamp((int)Math.Round(TimeoutSeconds), 5, 180),
@@ -274,8 +418,63 @@ public sealed partial class ProvidersSettingsViewModel : ObservableObject
     private Task AddOpenAiProviderAsync() => AddLlmPresetAsync("custom");
 
     [RelayCommand]
+    private async Task AddPolishProviderAsync()
+    {
+        const string baseName = "AI 文本润色";
+        var sameCount = Providers.Count(p =>
+            p.Kind == ProviderKind.OpenAiCompatible &&
+            p.DisplayName.StartsWith(baseName, StringComparison.OrdinalIgnoreCase)) + 1;
+
+        var displayName = sameCount == 1 ? baseName : $"{baseName} #{sameCount}";
+
+        var templateSource = Providers.FirstOrDefault(p =>
+            p.Kind == ProviderKind.OpenAiCompatible &&
+            !string.IsNullOrWhiteSpace(p.BaseUrl));
+        var baseUrl = templateSource?.BaseUrl ?? "https://api.openai.com/v1";
+        var model = !string.IsNullOrWhiteSpace(templateSource?.Model) ? templateSource.Model : "gpt-4o-mini";
+        var inheritedApiKey = templateSource?.ApiKeyPlaintext ?? string.Empty;
+
+        var config = new ProviderInstanceConfig
+        {
+            Id = $"polish-{Guid.NewGuid():N}",
+            DisplayName = displayName,
+            Kind = ProviderKind.OpenAiCompatible,
+            Role = ProviderRole.Polish,
+            TriggerMode = PolishTriggerMode.AutoParallel,
+            DefaultPolishStyle = PolishStyle.General,
+            Enabled = true,
+            SortOrder = Providers.Count,
+            BaseUrl = baseUrl,
+            Model = model,
+            SystemPrompt = ProviderInstanceConfig.DefaultOpenAiSystemPrompt,
+            Temperature = 0.3,
+            TimeoutSeconds = 30,
+        };
+
+        var vm = new ProviderItemViewModel(config, inheritedApiKey, OnItemEnabledToggled);
+        vm.PropertyChanged += OnProviderItemPropertyChanged;
+        Providers.Add(vm);
+        SelectedProvider = vm;
+
+        var reusedConnection = !string.IsNullOrWhiteSpace(inheritedApiKey) ||
+            baseUrl.Contains("localhost", StringComparison.OrdinalIgnoreCase) ||
+            baseUrl.Contains("127.0.0.1", StringComparison.OrdinalIgnoreCase);
+
+        var message = reusedConnection
+            ? $"已添加「{displayName}」专属润色服务（已自动复用现有大模型连接参数），可按需设置触发方式与默认风格。"
+            : $"已添加「{displayName}」专属润色服务，请填写 API Base URL 与 API Key 后保存。";
+        await SaveAllProvidersAsync(message);
+    }
+
+    [RelayCommand]
     private async Task AddLlmPresetAsync(string? presetKey)
     {
+        if (string.Equals(presetKey?.Trim(), "polish", StringComparison.OrdinalIgnoreCase))
+        {
+            await AddPolishProviderAsync();
+            return;
+        }
+
         var (baseName, baseUrl, model, keylessHint) = (presetKey?.Trim().ToLowerInvariant()) switch
         {
             "openai" => ("OpenAI", "https://api.openai.com/v1", "gpt-4o-mini", false),
@@ -439,7 +638,9 @@ public sealed partial class ProvidersSettingsViewModel : ObservableObject
     {
         if (SelectedProvider is not null)
         {
-            SelectedProvider.SystemPrompt = ProviderInstanceConfig.DefaultOpenAiSystemPrompt;
+            SelectedProvider.SystemPrompt = SelectedProvider.IsPolishRole && SelectedProvider.IsCustomPolishStyle
+                ? PolishConfig.DefaultCustomPrompt
+                : ProviderInstanceConfig.DefaultOpenAiSystemPrompt;
         }
     }
 

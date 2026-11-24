@@ -14,7 +14,7 @@
         <StackPanel Grid.Row="0" Spacing="4">
             <TextBlock Text="翻译服务" Style="{StaticResource SubtitleTextBlockStyle}" />
             <TextBlock
-                Text="支持同时启用多个服务并发翻译，可添加多个 OpenAI 兼容大模型实例（如 DeepSeek、OpenAI、Ollama、OneAPI 等）。API Key 均经由 Windows DPAPI 加密存储。"
+                Text="支持同时启用多个服务并发流式输出，可添加多个 OpenAI 兼容大模型实例（用于文本翻译或专属 AI 文本润色）。API Key 均经由 Windows DPAPI 加密存储。"
                 Style="{StaticResource CaptionTextBlockStyle}"
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                 TextWrapping="Wrap" />
@@ -32,6 +32,8 @@
                 </StackPanel>
                 <Button.Flyout>
                     <MenuFlyout Placement="BottomEdgeAlignedLeft">
+                        <MenuFlyoutItem Text="✨ 添加专属 AI 润色服务" Tag="polish" Click="AddPolishProvider_Click" />
+                        <MenuFlyoutSeparator />
                         <MenuFlyoutItem Text="OpenAI (gpt-4o-mini)" Tag="openai" Click="AddLlmPreset_Click" />
                         <MenuFlyoutItem Text="DeepSeek (deepseek-chat)" Tag="deepseek" Click="AddLlmPreset_Click" />
                         <MenuFlyoutItem Text="Google Gemini (gemini-2.5-flash)" Tag="gemini" Click="AddLlmPreset_Click" />
@@ -99,7 +101,7 @@
                                                     FontSize="10"
                                                     FontWeight="SemiBold"
                                                     Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
-                                                    Text="{x:Bind BadgeText}" />
+                                                    Text="{x:Bind BadgeText, Mode=OneWay}" />
                                             </Border>
                                             <TextBlock
                                                 FontSize="13"
@@ -110,7 +112,7 @@
                                         <TextBlock
                                             FontSize="11"
                                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                            Text="{x:Bind KindLabel}" />
+                                            Text="{x:Bind KindLabel, Mode=OneWay}" />
                                     </StackPanel>
 
                                     <ToggleSwitch
@@ -212,6 +214,46 @@
                             <StackPanel
                                 Spacing="12"
                                 Visibility="{x:Bind ViewModel.SelectedProvider.IsOpenAi, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                                <ComboBox
+                                    Header="服务功能定位"
+                                    HorizontalAlignment="Stretch"
+                                    SelectedIndex="{x:Bind ViewModel.SelectedProvider.RoleIndex, Mode=TwoWay}">
+                                    <ComboBoxItem Content="🌐 文本翻译" />
+                                    <ComboBoxItem Content="✨ 文本润色" />
+                                </ComboBox>
+
+                                <Grid
+                                    ColumnSpacing="12"
+                                    Visibility="{x:Bind ViewModel.SelectedProvider.IsPolishRole, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="200" />
+                                    </Grid.ColumnDefinitions>
+
+                                    <ComboBox
+                                        Grid.Column="0"
+                                        Header="触发方式"
+                                        HorizontalAlignment="Stretch"
+                                        SelectedIndex="{x:Bind ViewModel.SelectedProvider.TriggerModeIndex, Mode=TwoWay}">
+                                        <ComboBoxItem Content="自动并行运行" />
+                                        <ComboBoxItem Content="按需点击或 Alt+P 触发" />
+                                    </ComboBox>
+
+                                    <ComboBox
+                                        Grid.Column="1"
+                                        Header="默认润色风格"
+                                        HorizontalAlignment="Stretch"
+                                        SelectedIndex="{x:Bind ViewModel.SelectedProvider.DefaultPolishStyleIndex, Mode=TwoWay}">
+                                        <ComboBoxItem Content="通用自然" />
+                                        <ComboBoxItem Content="学术严谨" />
+                                        <ComboBoxItem Content="商务得体" />
+                                        <ComboBoxItem Content="口语地道" />
+                                        <ComboBoxItem Content="精简凝练" />
+                                        <ComboBoxItem Content="代码命名" />
+                                        <ComboBoxItem Content="自定义 Prompt" />
+                                    </ComboBox>
+                                </Grid>
+
                                 <TextBox
                                     Header="API Base URL"
                                     PlaceholderText="https://api.openai.com/v1"
@@ -262,9 +304,25 @@
                                     PlaceholderText="sk-..."
                                     Password="{x:Bind ViewModel.SelectedProvider.ApiKeyPlaintext, Mode=TwoWay}" />
 
-                                <StackPanel Spacing="6">
+                                <Border
+                                    Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+                                    CornerRadius="6"
+                                    Padding="12,8"
+                                    Visibility="{x:Bind ViewModel.SelectedProvider.ShowPresetPolishPromptHint, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                                    <TextBlock
+                                        Text="当前润色风格已内置专业润色提示词（自动保持原文语种输出，不跨语种翻译）。如需编写自定义指令，可将「默认润色风格」切换为「自定义 Prompt」。"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        TextWrapping="Wrap" />
+                                </Border>
+
+                                <StackPanel
+                                    Spacing="6"
+                                    Visibility="{x:Bind ViewModel.SelectedProvider.ShowSystemPromptSection, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
                                     <Grid>
-                                        <TextBlock Text="系统提示词 (System Prompt)" VerticalAlignment="Center" />
+                                        <TextBlock
+                                            Text="{x:Bind ViewModel.SelectedProvider.SystemPromptHeader, Mode=OneWay}"
+                                            VerticalAlignment="Center" />
                                         <Button
                                             Content="恢复默认"
                                             HorizontalAlignment="Right"
@@ -278,12 +336,13 @@
                                         MinHeight="84"
                                         MaxHeight="150"
                                         ScrollViewer.VerticalScrollBarVisibility="Auto"
-                                        PlaceholderText="支持 {source} 与 {target} 占位符"
+                                        PlaceholderText="{x:Bind ViewModel.SelectedProvider.SystemPromptPlaceholder, Mode=OneWay}"
                                         Text="{x:Bind ViewModel.SelectedProvider.SystemPrompt, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                                     <TextBlock
-                                        Text="提示：可使用 {source} 和 {target} 占位符自动注入检测到的源语言和目标语言。"
+                                        Text="{x:Bind ViewModel.SelectedProvider.SystemPromptHint, Mode=OneWay}"
                                         Style="{StaticResource CaptionTextBlockStyle}"
-                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        TextWrapping="Wrap" />
                                 </StackPanel>
                             </StackPanel>
 

@@ -24,6 +24,7 @@ public sealed partial class TranslationResultCardControl : UserControl
             new PropertyMetadata(null, OnViewModelChanged));
 
     private ServiceCardViewModel? _subscribedViewModel;
+    private ServiceCardViewModel? _flyoutNotifiedViewModel;
     private string? _lastRenderedMarkdownText;
     private ElementTheme _lastRenderedMarkdownTheme = ElementTheme.Default;
 
@@ -91,6 +92,8 @@ public sealed partial class TranslationResultCardControl : UserControl
 
     private void DetachViewModel()
     {
+        CloseFlyoutNotificationIfNeeded();
+
         if (_subscribedViewModel is not null)
         {
             _subscribedViewModel.PropertyChanged -= OnViewModelPropertyChanged;
@@ -117,6 +120,55 @@ public sealed partial class TranslationResultCardControl : UserControl
             or nameof(ServiceCardViewModel.State))
         {
             RenderFormattedMarkdown();
+        }
+    }
+
+    private void PolishStyleFlyout_Opening(object? sender, object e)
+    {
+        if (_flyoutNotifiedViewModel is null && ViewModel is { } notifyTarget)
+        {
+            _flyoutNotifiedViewModel = notifyTarget;
+            notifyTarget.NotifyFlyoutOpened();
+        }
+
+        if (sender is not MenuFlyout flyout || ViewModel is not { } currentVm)
+        {
+            return;
+        }
+
+        flyout.Items.Clear();
+        var activeStyle = currentVm.CardPolishStyle;
+
+        foreach (var (style, label) in ServiceCardViewModel.PolishStylePresets)
+        {
+            var capturedStyle = style;
+            var menuItem = new ToggleMenuFlyoutItem
+            {
+                Text = label,
+                IsChecked = style == activeStyle,
+            };
+            menuItem.Click += async (_, _) =>
+            {
+                if (ViewModel is { } vm)
+                {
+                    await vm.SelectPolishStyleAsync(capturedStyle);
+                }
+            };
+            flyout.Items.Add(menuItem);
+        }
+    }
+
+    private void PolishStyleFlyout_Closed(object? sender, object e)
+    {
+        CloseFlyoutNotificationIfNeeded();
+    }
+
+    private void CloseFlyoutNotificationIfNeeded()
+    {
+        if (_flyoutNotifiedViewModel is { } notified)
+        {
+            _flyoutNotifiedViewModel = null;
+            notified.NotifyFlyoutClosed();
         }
     }
 
@@ -410,7 +462,6 @@ public sealed partial class TranslationResultCardControl : UserControl
 
     private void Header_Tapped(object sender, TappedRoutedEventArgs e)
     {
-        // Ignore taps originating from action buttons or toggle buttons inside the header.
         if (e.OriginalSource is DependencyObject source && HasParentButton(source))
         {
             return;

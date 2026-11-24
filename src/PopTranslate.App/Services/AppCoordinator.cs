@@ -76,8 +76,8 @@ internal static class ClipboardLoopGuard
 }
 
 /// <summary>
-/// Central UI-thread orchestrator connecting global hotkeys, dual-action hover pill,
-/// screenshot/silent OCR, parallel translation &amp; polish popup, Mica settings window, and tray residency.
+/// Central UI-thread orchestrator connecting global hotkeys, single Fluent 2 hover icon,
+/// screenshot/silent OCR, unified parallel translation &amp; AI polish popup, Mica settings window, and tray residency.
 /// </summary>
 public sealed class AppCoordinator : IDisposable
 {
@@ -175,12 +175,11 @@ public sealed class AppCoordinator : IDisposable
         var settings = await _settingsStore.LoadAsync();
         var isAdmin = SafeIsAdmin();
 
-        // Pre-warm hover pill and Desktop Acrylic translation popup hidden for instant (<30ms) display.
+        // Pre-warm hover icon and Desktop Acrylic unified popup hidden for instant (<30ms) display.
         _hoverIconWindow = _serviceProvider.GetRequiredService<FloatingHoverIconWindow>();
         _hoverIconWindow.ApplyTheme(settings.Window.Theme);
         _hoverIconWindow.PreWarm();
-        _hoverIconWindow.TranslateClicked += OnHoverTranslateClicked;
-        _hoverIconWindow.PolishClicked += OnHoverPolishClicked;
+        _hoverIconWindow.IconClicked += OnHoverIconClicked;
         _hoverIconWindow.BlacklistProcessRequested += (_, processName) => EnqueueUi(() => _ = AddProcessToBlacklistAsync(processName));
         _hoverIconWindow.MuteHoverRequested += (_, duration) => EnqueueUi(() => SetHoverMute(duration));
         _hoverIconWindow.DisableHoverIconRequested += (_, _) => EnqueueUi(() => _ = ToggleHoverIconAsync(enabled: false));
@@ -226,7 +225,13 @@ public sealed class AppCoordinator : IDisposable
         await HandleStartupArgumentsAsync(args ?? [], isFirstEverLaunch, settings);
     }
 
-    public void OpenInputTranslation(string? initialText = null, nint? sourceWindowHandle = null)
+    public void OpenInputTranslation(string? initialText = null, nint? sourceWindowHandle = null) =>
+        OpenUnifiedPopupForInput(initialText, sourceWindowHandle, prioritizePolish: false);
+
+    public void OpenInputPolish(string? initialText = null, nint? sourceWindowHandle = null) =>
+        OpenUnifiedPopupForInput(initialText, sourceWindowHandle, prioritizePolish: true);
+
+    private void OpenUnifiedPopupForInput(string? initialText, nint? sourceWindowHandle, bool prioritizePolish)
     {
         if (_disposed || _popupWindow is null)
         {
@@ -238,42 +243,22 @@ public sealed class AppCoordinator : IDisposable
             sourceWindowHandle ?? _windowHelperService.GetForegroundWindowHandle());
         _lastSourceWindowHandle = resolvedSource;
         _popupViewModel.SetSourceWindowHandle(resolvedSource);
-        _popupViewModel.PrepareForInput();
 
         var cursor = _windowHelperService.GetCursorPosition();
         if (!string.IsNullOrWhiteSpace(initialText))
         {
+            _popupViewModel.PrepareForInput(prioritizePolish: prioritizePolish, collapseSourceCard: true);
             _popupWindow.ShowPopup(cursor, focusSourceInput: false);
-            _ = _popupViewModel.TranslateTextAsync(initialText, isFromOcr: false, resetLanguageSelection: true);
+            _ = _popupViewModel.TranslateTextAsync(
+                initialText,
+                isFromOcr: false,
+                resetLanguageSelection: true,
+                prioritizePolish: prioritizePolish,
+                collapseSourceCard: true);
         }
         else
         {
-            _popupWindow.ShowPopup(cursor, focusSourceInput: true);
-        }
-    }
-
-    public void OpenInputPolish(string? initialText = null, nint? sourceWindowHandle = null)
-    {
-        if (_disposed || _popupWindow is null)
-        {
-            return;
-        }
-
-        _hoverIconWindow?.HideIcon();
-        var resolvedSource = SanitizeSourceWindowHandle(
-            sourceWindowHandle ?? _windowHelperService.GetForegroundWindowHandle());
-        _lastSourceWindowHandle = resolvedSource;
-        _popupViewModel.SetSourceWindowHandle(resolvedSource);
-        _popupViewModel.PrepareForPolishInput();
-
-        var cursor = _windowHelperService.GetCursorPosition();
-        if (!string.IsNullOrWhiteSpace(initialText))
-        {
-            _popupWindow.ShowPopup(cursor, focusSourceInput: false);
-            _ = _popupViewModel.PolishTextAsync(initialText, resetStyleToDefault: true);
-        }
-        else
-        {
+            _popupViewModel.PrepareForInput(prioritizePolish: prioritizePolish, collapseSourceCard: false);
             _popupWindow.ShowPopup(cursor, focusSourceInput: true);
         }
     }
@@ -358,7 +343,12 @@ public sealed class AppCoordinator : IDisposable
             var ocrResult = await _ocrOrchestrator.RecognizeAsync(screenshot.ToOcrImage());
             if (ocrResult.IsSuccess && !string.IsNullOrWhiteSpace(ocrResult.Text))
             {
-                await _popupViewModel.TranslateTextAsync(ocrResult.Text, isFromOcr: true, resetLanguageSelection: true);
+                await _popupViewModel.TranslateTextAsync(
+                    ocrResult.Text,
+                    isFromOcr: true,
+                    resetLanguageSelection: true,
+                    prioritizePolish: false,
+                    collapseSourceCard: true);
             }
             else
             {
@@ -567,8 +557,9 @@ public sealed class AppCoordinator : IDisposable
                 }
                 else
                 {
-                    await HandleSelectionTranslateHotkeyAsync(
-                        new HotkeyPressedEventArgs(HotkeyAction.SelectionTranslate, HotkeyGesture.Empty, cursor, fgHwnd));
+                    await HandleSelectionHotkeyAsync(
+                        new HotkeyPressedEventArgs(HotkeyAction.SelectionTranslate, HotkeyGesture.Empty, cursor, fgHwnd),
+                        prioritizePolish: false);
                 }
                 return true;
 
@@ -579,8 +570,9 @@ public sealed class AppCoordinator : IDisposable
                 }
                 else
                 {
-                    await HandleSelectionPolishHotkeyAsync(
-                        new HotkeyPressedEventArgs(HotkeyAction.SelectionPolish, HotkeyGesture.Empty, cursor, fgHwnd));
+                    await HandleSelectionHotkeyAsync(
+                        new HotkeyPressedEventArgs(HotkeyAction.SelectionPolish, HotkeyGesture.Empty, cursor, fgHwnd),
+                        prioritizePolish: true);
                 }
                 return true;
 
@@ -637,7 +629,7 @@ public sealed class AppCoordinator : IDisposable
         switch (args.Action)
         {
             case HotkeyAction.SelectionTranslate:
-                await HandleSelectionTranslateHotkeyAsync(args);
+                await HandleSelectionHotkeyAsync(args, prioritizePolish: false);
                 break;
 
             case HotkeyAction.InputTranslate:
@@ -649,7 +641,7 @@ public sealed class AppCoordinator : IDisposable
                 break;
 
             case HotkeyAction.SelectionPolish:
-                await HandleSelectionPolishHotkeyAsync(args);
+                await HandleSelectionHotkeyAsync(args, prioritizePolish: true);
                 break;
 
             case HotkeyAction.SilentOcr:
@@ -658,7 +650,7 @@ public sealed class AppCoordinator : IDisposable
         }
     }
 
-    private async Task HandleSelectionTranslateHotkeyAsync(HotkeyPressedEventArgs args)
+    private async Task HandleSelectionHotkeyAsync(HotkeyPressedEventArgs args, bool prioritizePolish)
     {
         if (_popupWindow is null)
         {
@@ -681,66 +673,32 @@ public sealed class AppCoordinator : IDisposable
 
             if (captured.IsSuccess && !string.IsNullOrWhiteSpace(captured.Text))
             {
-                _popupViewModel.PrepareForInput();
+                _popupViewModel.PrepareForInput(prioritizePolish: prioritizePolish, collapseSourceCard: true);
                 _popupWindow.ShowPopup(args.CursorPosition, focusSourceInput: false);
-                await _popupViewModel.TranslateTextAsync(captured.Text, isFromOcr: false, resetLanguageSelection: true);
+                await _popupViewModel.TranslateTextAsync(
+                    captured.Text,
+                    isFromOcr: false,
+                    resetLanguageSelection: true,
+                    prioritizePolish: prioritizePolish,
+                    collapseSourceCard: true);
             }
             else
             {
-                _popupViewModel.PrepareForInput(
-                    string.IsNullOrWhiteSpace(captured.FailureReason)
-                        ? "未读取到选中文本，可直接输入或粘贴翻译。"
-                        : captured.FailureReason);
-                _popupWindow.ShowPopup(args.CursorPosition, focusSourceInput: true);
-            }
-        }
-        catch (Exception ex)
-        {
-            _popupViewModel.PrepareForInput();
-            _popupWindow.ShowPopup(args.CursorPosition, focusSourceInput: true);
-            _popupViewModel.ShowStatusError($"取词失败：{ex.Message}");
-        }
-    }
-
-    private async Task HandleSelectionPolishHotkeyAsync(HotkeyPressedEventArgs args)
-    {
-        if (_popupWindow is null)
-        {
-            return;
-        }
-
-        _hoverIconWindow?.HideIcon();
-        var sourceHwnd = SanitizeSourceWindowHandle(args.ForegroundWindowHandle);
-        _lastSourceWindowHandle = sourceHwnd;
-        _popupViewModel.SetSourceWindowHandle(sourceHwnd);
-
-        ClipboardLoopGuard.SuppressFor(TimeSpan.FromMilliseconds(900));
-
-        try
-        {
-            var captured = await _textSelectionService.CaptureSelectionAsync(
-                SelectionTriggerSource.Hotkey,
-                _settingsStore.Current.Selection,
-                args.ForegroundWindowHandle);
-
-            if (captured.IsSuccess && !string.IsNullOrWhiteSpace(captured.Text))
-            {
-                _popupViewModel.PrepareForPolishInput();
-                _popupWindow.ShowPopup(args.CursorPosition, focusSourceInput: false);
-                await _popupViewModel.PolishTextAsync(captured.Text, resetStyleToDefault: true);
-            }
-            else
-            {
-                _popupViewModel.PrepareForPolishInput(
-                    string.IsNullOrWhiteSpace(captured.FailureReason)
+                var fallbackReason = string.IsNullOrWhiteSpace(captured.FailureReason)
+                    ? (prioritizePolish
                         ? "未读取到选中文本，可直接输入或粘贴润色。"
-                        : captured.FailureReason);
+                        : "未读取到选中文本，可直接输入或粘贴翻译。")
+                    : captured.FailureReason;
+                _popupViewModel.PrepareForInput(
+                    initialHint: fallbackReason,
+                    prioritizePolish: prioritizePolish,
+                    collapseSourceCard: false);
                 _popupWindow.ShowPopup(args.CursorPosition, focusSourceInput: true);
             }
         }
         catch (Exception ex)
         {
-            _popupViewModel.PrepareForPolishInput();
+            _popupViewModel.PrepareForInput(prioritizePolish: prioritizePolish, collapseSourceCard: false);
             _popupWindow.ShowPopup(args.CursorPosition, focusSourceInput: true);
             _popupViewModel.ShowStatusError($"取词失败：{ex.Message}");
         }
@@ -810,9 +768,14 @@ public sealed class AppCoordinator : IDisposable
         }
 
         var cursor = _windowHelperService.GetCursorPosition();
-        _popupViewModel.PrepareForInput();
+        _popupViewModel.PrepareForInput(prioritizePolish: false, collapseSourceCard: true);
         _popupWindow.ShowPopup(cursor, focusSourceInput: false);
-        await _popupViewModel.TranslateTextAsync(text, isFromOcr: false, resetLanguageSelection: true);
+        await _popupViewModel.TranslateTextAsync(
+            text,
+            isFromOcr: false,
+            resetLanguageSelection: true,
+            prioritizePolish: false,
+            collapseSourceCard: true);
     }
 
     private void OnSelectionHoverDetected(object? sender, HoverSelectionEventArgs e)
@@ -850,7 +813,7 @@ public sealed class AppCoordinator : IDisposable
         });
     }
 
-    private void OnHoverTranslateClicked(object? sender, EventArgs e)
+    private void OnHoverIconClicked(object? sender, EventArgs e)
     {
         var pending = _pendingHoverSelection;
         _pendingHoverSelection = null;
@@ -860,23 +823,10 @@ public sealed class AppCoordinator : IDisposable
             return;
         }
 
-        _ = HandleHoverActionAsync(pending, polishMode: false);
+        _ = HandleHoverActionAsync(pending);
     }
 
-    private void OnHoverPolishClicked(object? sender, EventArgs e)
-    {
-        var pending = _pendingHoverSelection;
-        _pendingHoverSelection = null;
-
-        if (pending is null || _popupWindow is null)
-        {
-            return;
-        }
-
-        _ = HandleHoverActionAsync(pending, polishMode: true);
-    }
-
-    private async Task HandleHoverActionAsync(HoverSelectionEventArgs pending, bool polishMode)
+    private async Task HandleHoverActionAsync(HoverSelectionEventArgs pending)
     {
         if (_popupWindow is null)
         {
@@ -890,25 +840,20 @@ public sealed class AppCoordinator : IDisposable
         // Fast zero-clipboard path when UIA already supplied the selected preview text.
         if (pending.HasUiaText && !string.IsNullOrWhiteSpace(pending.PreviewText))
         {
-            if (polishMode)
-            {
-                _popupViewModel.PrepareForPolishInput();
-                _popupWindow.ShowPopup(pending.AnchorPoint, focusSourceInput: false);
-                await _popupViewModel.PolishTextAsync(pending.PreviewText, resetStyleToDefault: true);
-            }
-            else
-            {
-                _popupViewModel.PrepareForInput();
-                _popupWindow.ShowPopup(pending.AnchorPoint, focusSourceInput: false);
-                await _popupViewModel.TranslateTextAsync(pending.PreviewText, isFromOcr: false, resetLanguageSelection: true);
-            }
-
+            _popupViewModel.PrepareForInput(prioritizePolish: false, collapseSourceCard: true);
+            _popupWindow.ShowPopup(pending.AnchorPoint, focusSourceInput: false);
+            await _popupViewModel.TranslateTextAsync(
+                pending.PreviewText,
+                isFromOcr: false,
+                resetLanguageSelection: true,
+                prioritizePolish: false,
+                collapseSourceCard: true);
             return;
         }
 
         ClipboardLoopGuard.SuppressFor(TimeSpan.FromMilliseconds(900));
 
-        // Fallback capture ONLY after explicit user click on the floating pill.
+        // Fallback capture ONLY after explicit user click on the floating icon.
         try
         {
             var captured = await _textSelectionService.CaptureSelectionAsync(
@@ -918,47 +863,30 @@ public sealed class AppCoordinator : IDisposable
 
             if (captured.IsSuccess && !string.IsNullOrWhiteSpace(captured.Text))
             {
-                if (polishMode)
-                {
-                    _popupViewModel.PrepareForPolishInput();
-                    _popupWindow.ShowPopup(pending.AnchorPoint, focusSourceInput: false);
-                    await _popupViewModel.PolishTextAsync(captured.Text, resetStyleToDefault: true);
-                }
-                else
-                {
-                    _popupViewModel.PrepareForInput();
-                    _popupWindow.ShowPopup(pending.AnchorPoint, focusSourceInput: false);
-                    await _popupViewModel.TranslateTextAsync(captured.Text, isFromOcr: false, resetLanguageSelection: true);
-                }
+                _popupViewModel.PrepareForInput(prioritizePolish: false, collapseSourceCard: true);
+                _popupWindow.ShowPopup(pending.AnchorPoint, focusSourceInput: false);
+                await _popupViewModel.TranslateTextAsync(
+                    captured.Text,
+                    isFromOcr: false,
+                    resetLanguageSelection: true,
+                    prioritizePolish: false,
+                    collapseSourceCard: true);
             }
             else
             {
                 var fallbackMsg = string.IsNullOrWhiteSpace(captured.FailureReason)
                     ? "未能从目标窗口读取选区，请直接输入或粘贴。"
                     : captured.FailureReason;
-                if (polishMode)
-                {
-                    _popupViewModel.PrepareForPolishInput(fallbackMsg);
-                }
-                else
-                {
-                    _popupViewModel.PrepareForInput(fallbackMsg);
-                }
-
+                _popupViewModel.PrepareForInput(
+                    initialHint: fallbackMsg,
+                    prioritizePolish: false,
+                    collapseSourceCard: false);
                 _popupWindow.ShowPopup(pending.AnchorPoint, focusSourceInput: true);
             }
         }
         catch (Exception ex)
         {
-            if (polishMode)
-            {
-                _popupViewModel.PrepareForPolishInput();
-            }
-            else
-            {
-                _popupViewModel.PrepareForInput();
-            }
-
+            _popupViewModel.PrepareForInput(prioritizePolish: false, collapseSourceCard: false);
             _popupWindow.ShowPopup(pending.AnchorPoint, focusSourceInput: true);
             _popupViewModel.ShowStatusError($"划词读取失败：{ex.Message}");
         }
@@ -1079,9 +1007,14 @@ public sealed class AppCoordinator : IDisposable
 
         _hoverIconWindow?.HideIcon();
         var cursor = _windowHelperService.GetCursorPosition();
-        _popupViewModel.PrepareForInput();
+        _popupViewModel.PrepareForInput(prioritizePolish: false, collapseSourceCard: true);
         _popupWindow.ShowPopup(cursor, focusSourceInput: false);
-        await _popupViewModel.TranslateTextAsync(text, isFromOcr: false, resetLanguageSelection: true);
+        await _popupViewModel.TranslateTextAsync(
+            text,
+            isFromOcr: false,
+            resetLanguageSelection: true,
+            prioritizePolish: false,
+            collapseSourceCard: true);
     }
 
     private static async Task<string?> TryReadClipboardTextAsync()

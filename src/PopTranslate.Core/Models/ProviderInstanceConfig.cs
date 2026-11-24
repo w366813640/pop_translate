@@ -1,5 +1,17 @@
 namespace PopTranslate.Core.Models;
 
+public enum ProviderRole
+{
+    Translate = 0,
+    Polish = 1,
+}
+
+public enum PolishTriggerMode
+{
+    AutoParallel = 0,
+    OnDemand = 1,
+}
+
 public sealed class ProviderInstanceConfig
 {
     public const string DefaultOpenAiSystemPrompt =
@@ -11,6 +23,12 @@ public sealed class ProviderInstanceConfig
     public string DisplayName { get; set; } = "Translation Service";
 
     public ProviderKind Kind { get; set; } = ProviderKind.FreeTraditional;
+
+    public ProviderRole Role { get; set; } = ProviderRole.Translate;
+
+    public PolishTriggerMode TriggerMode { get; set; } = PolishTriggerMode.AutoParallel;
+
+    public PolishStyle DefaultPolishStyle { get; set; } = PolishStyle.General;
 
     public bool Enabled { get; set; } = true;
 
@@ -42,6 +60,9 @@ public sealed class ProviderInstanceConfig
         Id = Id,
         DisplayName = DisplayName,
         Kind = Kind,
+        Role = Role,
+        TriggerMode = TriggerMode,
+        DefaultPolishStyle = DefaultPolishStyle,
         Enabled = Enabled,
         IsCollapsedByDefault = IsCollapsedByDefault,
         SortOrder = SortOrder,

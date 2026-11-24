@@ -36,14 +36,14 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
     private readonly HashSet<string> _autoBackTranslatedCardIds = new(StringComparer.Ordinal);
 
     private bool _isSuppressingLanguageReaction;
+    private bool _prioritizePolishInCurrentSession;
+    private int _openFlyoutCount;
     private LanguageCode _lastDetectedSource = LanguageCode.Auto;
     private LanguageCode _lastEffectiveTarget = LanguageCode.ChineseSimplified;
     private bool _lastRequestWasFromOcr;
     private bool _autoCopiedInCurrentRun;
     private bool _lastSettingPinByDefault;
     private bool _lastSettingMergeLineBreaks = true;
-    private PolishStyle _lastSettingDefaultPolishStyle = PolishStyle.General;
-    private string _lastSettingCustomPrompt = PolishConfig.DefaultCustomPrompt;
     private OcrPromptMode _lastSettingOcrPromptMode = OcrPromptMode.PlainText;
     private CapturedScreenshot? _lastOcrScreenshot;
     private nint _sourceWindowHandle;
@@ -75,12 +75,10 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
 
         SourceLanguageOptions = BuildSourceLanguageOptions();
         TargetLanguageOptions = BuildTargetLanguageOptions(AppSettings.CreateDefault());
-        PolishStyleOptions = new ObservableCollection<PolishStyleOption>(PolishStyleOption.CreatePresets());
         OcrPromptModeOptions = new ObservableCollection<OcrPromptModeOption>(OcrPromptModeOption.CreatePresets());
 
         SelectedSourceLanguage = SourceLanguageOptions[0];
         SelectedTargetLanguage = TargetLanguageOptions[0];
-        SelectedPolishStyle = PolishStyleOptions[0];
         SelectedOcrPromptMode = OcrPromptModeOptions[0];
         MergeLineBreaks = true;
     }
@@ -93,8 +91,6 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
 
     public ObservableCollection<LanguageOption> TargetLanguageOptions { get; }
 
-    public ObservableCollection<PolishStyleOption> PolishStyleOptions { get; }
-
     public ObservableCollection<OcrPromptModeOption> OcrPromptModeOptions { get; }
 
     public ObservableCollection<ServiceCardViewModel> ServiceCards { get; } = [];
@@ -103,58 +99,47 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
 
     public bool HasSourceWindow => _sourceWindowHandle != 0;
 
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(IsTranslateMode))]
-    [NotifyPropertyChangedFor(nameof(IsPolishMode))]
-    [NotifyPropertyChangedFor(nameof(WindowTitle))]
-    [NotifyPropertyChangedFor(nameof(PrimaryActionLabel))]
-    [NotifyPropertyChangedFor(nameof(SourcePlaceholderText))]
-    [NotifyPropertyChangedFor(nameof(EmptyHintText))]
-    [NotifyPropertyChangedFor(nameof(NoProvidersHintText))]
-    [NotifyPropertyChangedFor(nameof(NoProvidersButtonText))]
-    [NotifyPropertyChangedFor(nameof(HasActiveModeProviders))]
-    [NotifyPropertyChangedFor(nameof(ShowNoEnabledProvidersHint))]
-    [NotifyPropertyChangedFor(nameof(ShowEmptyHint))]
-    public partial PopupMode CurrentMode { get; set; } = PopupMode.Translate;
+    public bool HasOpenInternalFlyout => _openFlyoutCount > 0;
+
+    public DateTimeOffset LastFlyoutActivityUtc { get; private set; } = DateTimeOffset.MinValue;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasSourceText))]
     [NotifyPropertyChangedFor(nameof(CharacterCountText))]
+    [NotifyPropertyChangedFor(nameof(ExpandedSourceFooterHint))]
     [NotifyPropertyChangedFor(nameof(SourceCollapsedPreviewText))]
+    [NotifyPropertyChangedFor(nameof(SourceLanguageButtonText))]
+    [NotifyPropertyChangedFor(nameof(ShowCollapsedSourceBar))]
+    [NotifyPropertyChangedFor(nameof(ShowExpandedSourceCard))]
     public partial string SourceText { get; set; } = string.Empty;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SourceLanguageButtonText))]
     public partial LanguageOption SelectedSourceLanguage { get; set; }
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(TargetLanguageButtonText))]
     public partial LanguageOption SelectedTargetLanguage { get; set; }
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(IsCustomPolishStyleSelected))]
-    public partial PolishStyleOption SelectedPolishStyle { get; set; }
-
-    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SelectedOcrPromptModeLabel))]
     public partial OcrPromptModeOption SelectedOcrPromptMode { get; set; }
 
     [ObservableProperty]
-    public partial string InlineCustomPrompt { get; set; } = PolishConfig.DefaultCustomPrompt;
-
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(HasDetectedBadge))]
-    public partial string DetectedLanguageBadge { get; set; } = string.Empty;
-
-    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsMergeLineBreaksOff))]
+    [NotifyPropertyChangedFor(nameof(MergeLineBreaksTooltip))]
     public partial bool MergeLineBreaks { get; set; }
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsUnpinned))]
     [NotifyPropertyChangedFor(nameof(PinGlyph))]
     [NotifyPropertyChangedFor(nameof(PinTooltip))]
     public partial bool IsPinned { get; set; }
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsSourceCardExpanded))]
-    [NotifyPropertyChangedFor(nameof(SourceCollapseGlyph))]
-    [NotifyPropertyChangedFor(nameof(SourceCollapseTooltip))]
+    [NotifyPropertyChangedFor(nameof(ShowCollapsedSourceBar))]
+    [NotifyPropertyChangedFor(nameof(ShowExpandedSourceCard))]
     public partial bool IsSourceCardCollapsed { get; set; }
 
     [ObservableProperty]
@@ -170,6 +155,8 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ShowEmptyHint))]
+    [NotifyPropertyChangedFor(nameof(ShowCollapsedSourceBar))]
+    [NotifyPropertyChangedFor(nameof(ShowExpandedSourceCard))]
     public partial bool IsOcrLoading { get; set; }
 
     [ObservableProperty]
@@ -181,38 +168,63 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
     public partial bool IsStatusError { get; set; }
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(HasActiveModeProviders))]
     [NotifyPropertyChangedFor(nameof(ShowNoEnabledProvidersHint))]
     [NotifyPropertyChangedFor(nameof(ShowEmptyHint))]
     public partial bool HasEnabledProviders { get; set; } = true;
-
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(HasActiveModeProviders))]
-    [NotifyPropertyChangedFor(nameof(ShowNoEnabledProvidersHint))]
-    [NotifyPropertyChangedFor(nameof(ShowEmptyHint))]
-    public partial bool HasEligiblePolishProviders { get; set; } = true;
-
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(SourceCopyGlyph))]
-    [NotifyPropertyChangedFor(nameof(SourceCopyTooltip))]
-    public partial bool SourceJustCopied { get; set; }
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(SourceSpeakGlyph))]
     [NotifyPropertyChangedFor(nameof(SourceSpeakTooltip))]
     public partial bool IsSpeakingSource { get; set; }
 
-    public bool IsTranslateMode => CurrentMode == PopupMode.Translate;
-
-    public bool IsPolishMode => CurrentMode == PopupMode.Polish;
-
-    public bool IsCustomPolishStyleSelected => SelectedPolishStyle?.Style == PolishStyle.Custom;
+    public string WindowTitle => "PopTranslate";
 
     public bool IsSourceCardExpanded => !IsSourceCardCollapsed;
 
-    public string SourceCollapseGlyph => IsSourceCardCollapsed ? "\uE70D" : "\uE70E";
+    public bool ShowCollapsedSourceBar => IsSourceCardCollapsed && (!IsOcrLoading || HasSourceText);
 
-    public string SourceCollapseTooltip => IsSourceCardCollapsed ? "展开原文编辑框 (Ctrl+I)" : "折叠原文编辑框";
+    public bool ShowExpandedSourceCard => !IsSourceCardCollapsed && (!IsOcrLoading || HasSourceText);
+
+    public bool IsMergeLineBreaksOff => !MergeLineBreaks;
+
+    public bool IsUnpinned => !IsPinned;
+
+    public string MergeLineBreaksTooltip => MergeLineBreaks
+        ? "智能合并 PDF / OCR 换行：已开启（点击关闭）"
+        : "智能合并 PDF / OCR 换行：已关闭（点击开启）";
+
+    public string SourceLanguageButtonText
+    {
+        get
+        {
+            var selected = SelectedSourceLanguage?.Code ?? LanguageCode.Auto;
+            if (!selected.IsAuto)
+            {
+                return selected.NativeName;
+            }
+
+            return !_lastDetectedSource.IsAuto && HasSourceText
+                ? $"自动 · {_lastDetectedSource.NativeName}"
+                : "自动检测";
+        }
+    }
+
+    public string TargetLanguageButtonText
+    {
+        get
+        {
+            var selected = SelectedTargetLanguage?.Code ?? LanguageCode.Auto;
+            if (!selected.IsAuto)
+            {
+                return selected.NativeName;
+            }
+
+            var settings = _settingsStore.Current;
+            return $"自动 ({FormatShortLanguageLabel(settings.PrimaryTargetLanguage)}↔{FormatShortLanguageLabel(settings.SecondaryTargetLanguage)})";
+        }
+    }
+
+    public string SelectedOcrPromptModeLabel => SelectedOcrPromptMode?.DisplayLabel ?? "纯文本";
 
     public string SourceCollapsedPreviewText
     {
@@ -228,7 +240,7 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
                 .Replace('\r', ' ')
                 .Replace('\n', ' ')
                 .Trim();
-            return collapsed.Length <= 100 ? collapsed : string.Concat(collapsed.AsSpan(0, 100), "...");
+            return collapsed.Length <= 120 ? collapsed : string.Concat(collapsed.AsSpan(0, 120), "...");
         }
     }
 
@@ -236,47 +248,31 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
 
     public string OcrPreviewToggleLabel => IsOcrPreviewExpanded ? "收起截图" : "截图预览";
 
-    public string WindowTitle => IsPolishMode ? "PopTranslate 润色" : "PopTranslate 翻译";
+    public string SourcePlaceholderText => "输入或粘贴文本，按 Enter 立即执行（Shift+Enter 换行）";
 
-    public string PrimaryActionLabel => IsPolishMode ? "润色" : "翻译";
+    public string EmptyHintText => "输入文本后按 Enter 立即并发执行 · Alt+S 互换语种 · Esc 隐藏";
 
-    public string SourcePlaceholderText => IsPolishMode
-        ? "输入或粘贴需要润色的文本，按 Enter 润色（Shift+Enter 换行）"
-        : "输入或粘贴文本，按 Enter 翻译（Shift+Enter 换行）";
+    public string NoProvidersHintText => "当前未启用任何翻译或 AI 润色服务";
 
-    public string EmptyHintText => IsPolishMode
-        ? "输入文本后按 Enter 立即并发润色 · Ctrl+Tab 切换翻译 · Esc 隐藏"
-        : "输入文本后按 Enter 立即并发翻译 · Ctrl+Tab 切换润色 · Esc 隐藏";
-
-    public string NoProvidersHintText => IsPolishMode
-        ? "润色功能需要至少启用一个 OpenAI 兼容大模型服务"
-        : "当前未启用任何翻译服务";
-
-    public string NoProvidersButtonText => IsPolishMode
-        ? "前往配置大模型"
-        : "前往设置启用服务";
-
-    public bool HasActiveModeProviders => IsPolishMode ? HasEligiblePolishProviders : HasEnabledProviders;
+    public string NoProvidersButtonText => "前往设置启用服务";
 
     public bool HasSourceText => !string.IsNullOrWhiteSpace(SourceText);
 
     public string CharacterCountText => string.IsNullOrEmpty(SourceText) ? string.Empty : $"{SourceText.Length} 字";
 
-    public string SourceCopyGlyph => SourceJustCopied ? "\uE73E" : "\uE8C8";
-
-    public string SourceCopyTooltip => SourceJustCopied ? "已复制原文" : "复制原文";
+    public string ExpandedSourceFooterHint => string.IsNullOrEmpty(SourceText)
+        ? "Enter 立即执行 · Shift+Enter 换行"
+        : $"{SourceText.Length} 字 · Enter 立即执行";
 
     public string SourceSpeakGlyph => IsSpeakingSource ? "\uE71A" : "\uE767";
 
     public string SourceSpeakTooltip => IsSpeakingSource ? "停止朗读原文" : "朗读原文";
 
-    public bool HasDetectedBadge => !string.IsNullOrWhiteSpace(DetectedLanguageBadge);
-
     public bool HasStatusBanner => !string.IsNullOrWhiteSpace(StatusBannerText);
 
-    public bool ShowNoEnabledProvidersHint => !HasActiveModeProviders;
+    public bool ShowNoEnabledProvidersHint => !HasEnabledProviders;
 
-    public bool ShowEmptyHint => ServiceCards.Count == 0 && !IsOcrLoading && !HasStatusBanner && HasActiveModeProviders;
+    public bool ShowEmptyHint => ServiceCards.Count == 0 && !IsOcrLoading && !HasStatusBanner && HasEnabledProviders;
 
     public string PinGlyph => IsPinned ? "\uE840" : "\uE718";
 
@@ -285,6 +281,23 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
     public void AttachDispatcher(DispatcherQueue dispatcher)
     {
         _dispatcher = dispatcher;
+    }
+
+    public void NotifyInternalFlyoutOpened()
+    {
+        _openFlyoutCount++;
+        LastFlyoutActivityUtc = DateTimeOffset.UtcNow;
+    }
+
+    public void NotifyInternalFlyoutClosed()
+    {
+        _openFlyoutCount = Math.Max(0, _openFlyoutCount - 1);
+        LastFlyoutActivityUtc = DateTimeOffset.UtcNow;
+    }
+
+    public void ResetInternalFlyoutState()
+    {
+        _openFlyoutCount = 0;
     }
 
     public void SetSourceWindowHandle(nint windowHandle)
@@ -331,23 +344,6 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
             SelectedTargetLanguage = TargetLanguageOptions.FirstOrDefault(x => x.Code == previousTargetCode)
                 ?? TargetLanguageOptions[0];
 
-            var polish = settings.Polish ?? new PolishConfig();
-            if (applySessionDefaults || polish.DefaultStyle != _lastSettingDefaultPolishStyle)
-            {
-                SelectedPolishStyle = PolishStyleOptions.FirstOrDefault(x => x.Style == polish.DefaultStyle)
-                    ?? PolishStyleOptions[0];
-                _lastSettingDefaultPolishStyle = polish.DefaultStyle;
-            }
-
-            var resolvedPrompt = string.IsNullOrWhiteSpace(polish.CustomPrompt)
-                ? PolishConfig.DefaultCustomPrompt
-                : polish.CustomPrompt;
-            if (applySessionDefaults || !string.Equals(resolvedPrompt, _lastSettingCustomPrompt, StringComparison.Ordinal))
-            {
-                InlineCustomPrompt = resolvedPrompt;
-                _lastSettingCustomPrompt = resolvedPrompt;
-            }
-
             var ocrMode = settings.Ocr?.PromptMode ?? OcrPromptMode.PlainText;
             if (applySessionDefaults || ocrMode != _lastSettingOcrPromptMode)
             {
@@ -356,8 +352,8 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
                 _lastSettingOcrPromptMode = ocrMode;
             }
 
-            HasEnabledProviders = settings.Providers.Any(p => p.Enabled);
-            HasEligiblePolishProviders = SafeGetEligiblePolishProviders().Count > 0;
+            HasEnabledProviders = HasAnyUsableEnabledProvider(settings);
+            OnPropertyChanged(nameof(TargetLanguageButtonText));
         }
         finally
         {
@@ -365,56 +361,42 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
         }
     }
 
-    public void PrepareForInput(string? initialHint = null)
+    public void PrepareForInput(
+        string? initialHint = null,
+        bool prioritizePolish = false,
+        bool collapseSourceCard = false)
     {
         CancelActiveTranslation();
         _lastRequestWasFromOcr = false;
+        _prioritizePolishInCurrentSession = prioritizePolish;
+        _lastDetectedSource = LanguageCode.Auto;
         ClearOcrContext();
 
-        CurrentMode = PopupMode.Translate;
-        IsSourceCardCollapsed = false;
+        IsSourceCardCollapsed = collapseSourceCard;
         SourceText = string.Empty;
         ServiceCards.Clear();
-        DetectedLanguageBadge = string.Empty;
         IsOcrLoading = false;
         StatusBannerText = initialHint;
         IsStatusError = false;
         RefreshProviderAvailability();
+        OnPropertyChanged(nameof(SourceLanguageButtonText));
         OnPropertyChanged(nameof(ShowEmptyHint));
         NotifyLayoutChanged();
     }
 
-    public void PrepareForPolishInput(string? initialHint = null)
-    {
-        CancelActiveTranslation();
-        _lastRequestWasFromOcr = false;
-        ClearOcrContext();
-
-        CurrentMode = PopupMode.Polish;
-        IsSourceCardCollapsed = false;
-        SyncPolishDefaultsFromSettings();
-
-        SourceText = string.Empty;
-        ServiceCards.Clear();
-        DetectedLanguageBadge = string.Empty;
-        IsOcrLoading = false;
-        StatusBannerText = initialHint;
-        IsStatusError = false;
-        RefreshProviderAvailability();
-        OnPropertyChanged(nameof(ShowEmptyHint));
-        NotifyLayoutChanged();
-    }
+    public void PrepareForPolishInput(string? initialHint = null) =>
+        PrepareForInput(initialHint, prioritizePolish: true, collapseSourceCard: false);
 
     public void BeginOcrCapture(CapturedScreenshot? screenshot = null)
     {
         CancelActiveTranslation();
         _lastRequestWasFromOcr = true;
+        _prioritizePolishInCurrentSession = false;
         _lastOcrScreenshot = screenshot;
+        _lastDetectedSource = LanguageCode.Auto;
 
-        CurrentMode = PopupMode.Translate;
-        IsSourceCardCollapsed = false;
+        IsSourceCardCollapsed = true;
         SourceText = string.Empty;
-        DetectedLanguageBadge = string.Empty;
         ServiceCards.Clear();
 
         SyncOcrPromptModeFromSettings();
@@ -430,6 +412,7 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
         IsStatusError = false;
         StatusBannerText = "正在识别截图中的文字...";
         RefreshProviderAvailability();
+        OnPropertyChanged(nameof(SourceLanguageButtonText));
         OnPropertyChanged(nameof(ShowEmptyHint));
         NotifyLayoutChanged();
     }
@@ -439,13 +422,23 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
         IsOcrLoading = false;
         IsStatusError = true;
         StatusBannerText = message;
+        if (!HasSourceText && !HasOcrContext)
+        {
+            IsSourceCardCollapsed = false;
+        }
+
         OnPropertyChanged(nameof(ShowEmptyHint));
         NotifyLayoutChanged();
     }
 
-    public Task TranslateTextAsync(string rawText, bool isFromOcr = false, bool resetLanguageSelection = true)
+    public Task TranslateTextAsync(
+        string rawText,
+        bool isFromOcr = false,
+        bool resetLanguageSelection = true,
+        bool prioritizePolish = false,
+        bool collapseSourceCard = true)
     {
-        CurrentMode = PopupMode.Translate;
+        _prioritizePolishInCurrentSession = prioritizePolish;
         IsOcrLoading = false;
         IsStatusError = false;
         StatusBannerText = null;
@@ -472,88 +465,69 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
 
         var mergeBreaks = MergeLineBreaks &&
                           (!isFromOcr || SelectedOcrPromptMode.Mode == OcrPromptMode.PlainText);
-        var preprocessed = PreprocessForCurrentMode(rawText, mergeBreaks, isFromOcr, PopupMode.Translate);
+        var preprocessed = PreprocessInputText(rawText, mergeBreaks, isFromOcr);
         SourceText = preprocessed;
 
         if (string.IsNullOrWhiteSpace(preprocessed))
         {
+            IsSourceCardCollapsed = false;
             CancelActiveTranslation();
             ServiceCards.Clear();
-            DetectedLanguageBadge = string.Empty;
+            _lastDetectedSource = LanguageCode.Auto;
             RefreshProviderAvailability();
+            OnPropertyChanged(nameof(SourceLanguageButtonText));
             OnPropertyChanged(nameof(ShowEmptyHint));
             NotifyLayoutChanged();
             return Task.CompletedTask;
         }
 
-        return ExecuteTranslationAsync(preprocessed, isFromOcr);
+        IsSourceCardCollapsed = collapseSourceCard;
+        return ExecuteUnifiedAsync(preprocessed, isFromOcr, prioritizePolish);
     }
 
-    public Task PolishTextAsync(string rawText, bool resetStyleToDefault = true)
+    public Task PolishTextAsync(string rawText, bool resetStyleToDefault = true) =>
+        TranslateTextAsync(
+            rawText,
+            isFromOcr: false,
+            resetLanguageSelection: resetStyleToDefault,
+            prioritizePolish: true,
+            collapseSourceCard: true);
+
+    public async Task TriggerAllPolishCardsAsync()
     {
-        CurrentMode = PopupMode.Polish;
-        IsOcrLoading = false;
-        IsStatusError = false;
-        StatusBannerText = null;
-        _lastRequestWasFromOcr = false;
-        ClearOcrContext();
-
-        if (resetStyleToDefault)
-        {
-            SyncPolishDefaultsFromSettings();
-        }
-
-        var preprocessed = PreprocessForCurrentMode(rawText, MergeLineBreaks, isFromOcr: false, PopupMode.Polish);
-        SourceText = preprocessed;
-
-        if (string.IsNullOrWhiteSpace(preprocessed))
-        {
-            CancelActiveTranslation();
-            ServiceCards.Clear();
-            DetectedLanguageBadge = string.Empty;
-            RefreshProviderAvailability();
-            OnPropertyChanged(nameof(ShowEmptyHint));
-            NotifyLayoutChanged();
-            return Task.CompletedTask;
-        }
-
-        return ExecutePolishAsync(preprocessed);
-    }
-
-    [RelayCommand]
-    private void SelectTranslateMode() => SwitchMode(PopupMode.Translate);
-
-    [RelayCommand]
-    private void SelectPolishMode() => SwitchMode(PopupMode.Polish);
-
-    public void ToggleMode() =>
-        SwitchMode(CurrentMode == PopupMode.Translate ? PopupMode.Polish : PopupMode.Translate);
-
-    public void SwitchMode(PopupMode mode)
-    {
-        if (CurrentMode == mode)
+        _prioritizePolishInCurrentSession = true;
+        if (!HasSourceText)
         {
             return;
         }
 
-        CancelActiveTranslation();
-        CurrentMode = mode;
-        IsOcrLoading = false;
-        StatusBannerText = null;
-        IsStatusError = false;
-        ServiceCards.Clear();
-        DetectedLanguageBadge = string.Empty;
-        RefreshProviderAvailability();
+        var waitingPolishCards = ServiceCards
+            .Where(c => c.IsPolishMode && c.IsWaitingOnDemand)
+            .ToList();
 
-        if (HasSourceText)
+        if (waitingPolishCards.Count > 0)
         {
-            _ = RetranslateAsync();
+            var tasks = waitingPolishCards.Select(c => RetrySinglePolishCardAsync(c.CardId));
+            await Task.WhenAll(tasks);
+            return;
         }
-        else
+
+        if (!ServiceCards.Any(c => c.IsPolishMode))
         {
-            OnPropertyChanged(nameof(ShowEmptyHint));
-            NotifyLayoutChanged();
+            await RetranslateAsync();
         }
+    }
+
+    [RelayCommand]
+    private void ToggleMergeLineBreaks()
+    {
+        MergeLineBreaks = !MergeLineBreaks;
+    }
+
+    [RelayCommand]
+    private void TogglePin()
+    {
+        IsPinned = !IsPinned;
     }
 
     [RelayCommand]
@@ -564,35 +538,28 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
         {
             CancelActiveTranslation();
             ServiceCards.Clear();
-            DetectedLanguageBadge = string.Empty;
+            _lastDetectedSource = LanguageCode.Auto;
             RefreshProviderAvailability();
+            OnPropertyChanged(nameof(SourceLanguageButtonText));
             OnPropertyChanged(nameof(ShowEmptyHint));
             NotifyLayoutChanged();
             return;
         }
 
         // Preserve user's manual Shift+Enter newlines in SourceText without overwriting SourceText!
-        var isOcrFlow = CurrentMode == PopupMode.Translate && _lastRequestWasFromOcr;
+        var isOcrFlow = _lastRequestWasFromOcr;
         var shouldMergeLineBreaks = isOcrFlow &&
                                     MergeLineBreaks &&
                                     SelectedOcrPromptMode.Mode == OcrPromptMode.PlainText;
-        var processed = PreprocessForCurrentMode(
+        var processed = PreprocessInputText(
             text,
             mergeLineBreaks: shouldMergeLineBreaks,
-            isFromOcr: isOcrFlow,
-            mode: CurrentMode);
+            isFromOcr: isOcrFlow);
 
-        if (CurrentMode == PopupMode.Polish)
-        {
-            await ExecutePolishAsync(processed);
-        }
-        else
-        {
-            await ExecuteTranslationAsync(processed, isOcrFlow);
-        }
+        await ExecuteUnifiedAsync(processed, isOcrFlow, _prioritizePolishInCurrentSession);
     }
 
-    private string PreprocessForCurrentMode(string rawText, bool mergeLineBreaks, bool isFromOcr, PopupMode mode)
+    private string PreprocessInputText(string rawText, bool mergeLineBreaks, bool isFromOcr)
     {
         if (string.IsNullOrWhiteSpace(rawText))
         {
@@ -600,9 +567,7 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
         }
 
         var settings = _settingsStore.Current;
-        var disableIdentifierSplit = !settings.EnableCodeIdentifierSplit ||
-                                     isFromOcr ||
-                                     (mode == PopupMode.Polish && SelectedPolishStyle?.Style == PolishStyle.CodeNaming);
+        var disableIdentifierSplit = !settings.EnableCodeIdentifierSplit || isFromOcr;
 
         if (disableIdentifierSplit && IsSingleWhitespaceFreeToken(rawText))
         {
@@ -671,7 +636,12 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
 
             if (ocrResult.IsSuccess && !string.IsNullOrWhiteSpace(ocrResult.Text))
             {
-                await TranslateTextAsync(ocrResult.Text, isFromOcr: true, resetLanguageSelection: false);
+                await TranslateTextAsync(
+                    ocrResult.Text,
+                    isFromOcr: true,
+                    resetLanguageSelection: false,
+                    prioritizePolish: _prioritizePolishInCurrentSession,
+                    collapseSourceCard: true);
             }
             else
             {
@@ -719,6 +689,9 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
             _isSuppressingLanguageReaction = false;
         }
 
+        OnPropertyChanged(nameof(SourceLanguageButtonText));
+        OnPropertyChanged(nameof(TargetLanguageButtonText));
+
         if (HasSourceText)
         {
             await RetranslateAsync();
@@ -726,30 +699,15 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void CopySource()
-    {
-        if (!ClipboardLoopGuard.TryCopyText(SourceText))
-        {
-            return;
-        }
-
-        SourceJustCopied = true;
-        _ = Task.Run(async () =>
-        {
-            await Task.Delay(1200);
-            EnqueueUi(() => SourceJustCopied = false);
-        });
-    }
-
-    [RelayCommand]
     private void ClearSource()
     {
         CancelActiveTranslation();
         SourceText = string.Empty;
-        DetectedLanguageBadge = string.Empty;
+        _lastDetectedSource = LanguageCode.Auto;
         StatusBannerText = null;
         IsStatusError = false;
         ServiceCards.Clear();
+        OnPropertyChanged(nameof(SourceLanguageButtonText));
         OnPropertyChanged(nameof(ShowEmptyHint));
         NotifyLayoutChanged();
     }
@@ -806,15 +764,15 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
         }
     }
 
-    public async Task ToggleSpeakCardAsync(string providerInstanceId)
+    public async Task ToggleSpeakCardAsync(string cardId)
     {
-        var card = ServiceCards.FirstOrDefault(c => string.Equals(c.ProviderInstanceId, providerInstanceId, StringComparison.Ordinal));
+        var card = FindCardById(cardId);
         if (card is null || string.IsNullOrWhiteSpace(card.TranslatedText))
         {
             return;
         }
 
-        if (card.IsSpeaking && string.Equals(_speakingCardId, providerInstanceId, StringComparison.Ordinal))
+        if (card.IsSpeaking && string.Equals(_speakingCardId, cardId, StringComparison.Ordinal))
         {
             StopActiveSpeech();
             return;
@@ -824,7 +782,7 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
 
         var cts = new CancellationTokenSource();
         _ttsCts = cts;
-        _speakingCardId = providerInstanceId;
+        _speakingCardId = cardId;
         card.IsSpeaking = true;
 
         var lang = !card.TargetLanguage.IsAuto
@@ -898,9 +856,9 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
         }
     }
 
-    public async Task<bool> WriteBackCardAsync(string providerInstanceId)
+    public async Task<bool> WriteBackCardAsync(string cardId)
     {
-        var card = ServiceCards.FirstOrDefault(c => string.Equals(c.ProviderInstanceId, providerInstanceId, StringComparison.Ordinal));
+        var card = FindCardById(cardId);
         if (card is null || _sourceWindowHandle == 0 || string.IsNullOrEmpty(card.TranslatedText) || card.IsLoading)
         {
             return false;
@@ -939,13 +897,19 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
             return false;
         }
 
-        var candidate = ServiceCards.FirstOrDefault(c => c.CanWriteBack);
+        ServiceCardViewModel? candidate = null;
+        if (_prioritizePolishInCurrentSession)
+        {
+            candidate = ServiceCards.FirstOrDefault(c => c.IsPolishMode && c.CanWriteBack);
+        }
+
+        candidate ??= ServiceCards.FirstOrDefault(c => c.CanWriteBack);
         if (candidate is null)
         {
             return false;
         }
 
-        return await WriteBackCardAsync(candidate.ProviderInstanceId);
+        return await WriteBackCardAsync(candidate.CardId);
     }
 
     public bool CopyCardByIndex(int zeroBasedIndex)
@@ -1018,7 +982,7 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
 
     partial void OnSelectedSourceLanguageChanged(LanguageOption value)
     {
-        if (_isSuppressingLanguageReaction || CurrentMode != PopupMode.Translate || !HasSourceText)
+        if (_isSuppressingLanguageReaction || !HasSourceText)
         {
             return;
         }
@@ -1028,7 +992,7 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
 
     partial void OnSelectedTargetLanguageChanged(LanguageOption value)
     {
-        if (_isSuppressingLanguageReaction || CurrentMode != PopupMode.Translate || !HasSourceText)
+        if (_isSuppressingLanguageReaction || !HasSourceText)
         {
             return;
         }
@@ -1039,18 +1003,6 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
     partial void OnMergeLineBreaksChanged(bool value)
     {
         if (_isSuppressingLanguageReaction || !HasSourceText)
-        {
-            return;
-        }
-
-        _ = RetranslateAsync();
-    }
-
-    partial void OnSelectedPolishStyleChanged(PolishStyleOption value)
-    {
-        NotifyLayoutChanged();
-
-        if (_isSuppressingLanguageReaction || CurrentMode != PopupMode.Polish || !HasSourceText)
         {
             return;
         }
@@ -1135,10 +1087,12 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
         }
     }
 
-    private async Task ExecuteTranslationAsync(string text, bool isFromOcr)
+    private async Task ExecuteUnifiedAsync(string text, bool isFromOcr, bool prioritizePolish)
     {
         CancelActiveTranslation();
         _autoCopiedInCurrentRun = false;
+        StatusBannerText = null;
+        IsStatusError = false;
 
         var settings = _settingsStore.Current;
         var enabledProviders = settings.Providers
@@ -1146,7 +1100,6 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
             .OrderBy(p => p.SortOrder)
             .ToList();
 
-        HasEnabledProviders = enabledProviders.Count > 0;
         ServiceCards.Clear();
 
         var routing = _languageRouter.Resolve(
@@ -1158,54 +1111,221 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
 
         _lastDetectedSource = routing.DetectedSourceLanguage;
         _lastEffectiveTarget = routing.TargetLanguage;
-        UpdateDetectedBadge(routing.DetectedSourceLanguage, routing.TargetLanguage);
+        OnPropertyChanged(nameof(SourceLanguageButtonText));
+        OnPropertyChanged(nameof(TargetLanguageButtonText));
 
-        if (enabledProviders.Count == 0)
-        {
-            OnPropertyChanged(nameof(ShowEmptyHint));
-            NotifyLayoutChanged();
-            return;
-        }
+        var showDiffByDefault = settings.Polish?.ShowDiffByDefault ?? false;
+        var translateCardsByProviderId = new Dictionary<string, ServiceCardViewModel>(StringComparer.Ordinal);
+        var polishCardsToRun = new List<(ServiceCardViewModel Card, ProviderInstanceConfig Config)>();
+        var polishCardCount = 0;
 
-        var cardsById = new Dictionary<string, ServiceCardViewModel>(StringComparer.Ordinal);
         foreach (var provider in enabledProviders)
         {
-            var card = new ServiceCardViewModel(
-                provider,
-                PopupMode.Translate,
-                text,
-                RetrySingleProviderAsync,
-                BackTranslateCardManualAsync,
-                CancelBackTranslationForCard,
-                _textDiffService,
-                NotifyLayoutChanged,
-                showDiffByDefault: false,
-                dispatcher: _dispatcher,
-                writeBackCallback: id => WriteBackCardAsync(id),
-                toggleSpeakCallback: ToggleSpeakCardAsync,
-                hasSourceWindow: HasSourceWindow)
+            if (provider.Role == ProviderRole.Polish)
             {
-                DetectedSourceLanguage = routing.DetectedSourceLanguage,
-                TargetLanguage = routing.TargetLanguage,
-            };
+                if (provider.Kind != ProviderKind.OpenAiCompatible)
+                {
+                    continue;
+                }
 
-            ServiceCards.Add(card);
-            cardsById[provider.Id] = card;
+                polishCardCount++;
+                var isOnDemand = provider.TriggerMode == PolishTriggerMode.OnDemand && !prioritizePolish;
+                var polishCard = CreatePolishCard(
+                    cardId: provider.Id,
+                    config: provider,
+                    sourceText: text,
+                    initialStyle: provider.DefaultPolishStyle,
+                    isWaitingOnDemand: isOnDemand,
+                    showDiffByDefault: showDiffByDefault,
+                    detectedLanguage: routing.DetectedSourceLanguage);
+
+                ServiceCards.Add(polishCard);
+                if (!isOnDemand)
+                {
+                    polishCardsToRun.Add((polishCard, provider));
+                }
+            }
+            else
+            {
+                var translateCard = CreateTranslateCard(
+                    cardId: provider.Id,
+                    config: provider,
+                    sourceText: text,
+                    detectedSource: routing.DetectedSourceLanguage,
+                    targetLanguage: routing.TargetLanguage);
+
+                ServiceCards.Add(translateCard);
+                translateCardsByProviderId[provider.Id] = translateCard;
+            }
         }
 
+        // Fallback: If invoked via Alt+P and the user has 0 enabled Role == ProviderRole.Polish providers,
+        // temporarily append/run any enabled OpenAiCompatible provider as a Polish card so Alt+P works out-of-the-box!
+        if (prioritizePolish && polishCardCount == 0)
+        {
+            var fallbackOpenAiProviders = enabledProviders
+                .Where(p => p.Kind == ProviderKind.OpenAiCompatible)
+                .ToList();
+
+            if (fallbackOpenAiProviders.Count == 0)
+            {
+                fallbackOpenAiProviders = SafeGetEligiblePolishProviders().ToList();
+            }
+
+            var defaultPolishStyle = settings.Polish?.DefaultStyle ?? PolishStyle.General;
+            foreach (var fallbackProvider in fallbackOpenAiProviders)
+            {
+                var fallbackStyle = fallbackProvider.DefaultPolishStyle != PolishStyle.General
+                    ? fallbackProvider.DefaultPolishStyle
+                    : defaultPolishStyle;
+
+                var fallbackCard = CreatePolishCard(
+                    cardId: $"{fallbackProvider.Id}::polish-fallback",
+                    config: fallbackProvider,
+                    sourceText: text,
+                    initialStyle: fallbackStyle,
+                    isWaitingOnDemand: false,
+                    showDiffByDefault: showDiffByDefault,
+                    detectedLanguage: routing.DetectedSourceLanguage);
+
+                ServiceCards.Add(fallbackCard);
+                polishCardsToRun.Add((fallbackCard, fallbackProvider));
+                polishCardCount++;
+            }
+
+            if (polishCardCount == 0 && ServiceCards.Count > 0)
+            {
+                StatusBannerText = "尚未启用 OpenAI 兼容大模型，前往「设置 → 翻译服务」添加即可使用 AI 润色。";
+                IsStatusError = false;
+            }
+        }
+
+        HasEnabledProviders = ServiceCards.Count > 0;
+        OnPropertyChanged(nameof(ShowNoEnabledProvidersHint));
         OnPropertyChanged(nameof(ShowEmptyHint));
         NotifyLayoutChanged();
+
+        if (ServiceCards.Count == 0)
+        {
+            return;
+        }
 
         var cts = new CancellationTokenSource();
         _activeTranslationCts = cts;
         var ct = cts.Token;
 
+        var parallelTasks = new List<Task>(1 + polishCardsToRun.Count);
+
+        if (translateCardsByProviderId.Count > 0)
+        {
+            parallelTasks.Add(StreamTranslateCardsBatchAsync(
+                text,
+                isFromOcr,
+                routing.TargetLanguage,
+                settings,
+                translateCardsByProviderId,
+                preferPolishForAutoCopy: prioritizePolish && polishCardsToRun.Count > 0,
+                ct));
+        }
+
+        foreach (var (polishCard, config) in polishCardsToRun)
+        {
+            parallelTasks.Add(StreamPolishCardInternalAsync(
+                polishCard,
+                config,
+                text,
+                routing.DetectedSourceLanguage,
+                settings,
+                allowAutoCopy: true,
+                ct));
+        }
+
+        if (parallelTasks.Count > 0)
+        {
+            await Task.WhenAll(parallelTasks);
+        }
+    }
+
+    private ServiceCardViewModel CreateTranslateCard(
+        string cardId,
+        ProviderInstanceConfig config,
+        string sourceText,
+        LanguageCode detectedSource,
+        LanguageCode targetLanguage)
+    {
+        return new ServiceCardViewModel(
+            config,
+            PopupMode.Translate,
+            sourceText,
+            RetrySingleCardAsync,
+            BackTranslateCardManualAsync,
+            CancelBackTranslationForCard,
+            _textDiffService,
+            NotifyLayoutChanged,
+            showDiffByDefault: false,
+            dispatcher: _dispatcher,
+            writeBackCallback: WriteBackCardAsync,
+            toggleSpeakCallback: ToggleSpeakCardAsync,
+            hasSourceWindow: HasSourceWindow,
+            cardId: cardId,
+            flyoutOpenedCallback: NotifyInternalFlyoutOpened,
+            flyoutClosedCallback: NotifyInternalFlyoutClosed)
+        {
+            DetectedSourceLanguage = detectedSource,
+            TargetLanguage = targetLanguage,
+        };
+    }
+
+    private ServiceCardViewModel CreatePolishCard(
+        string cardId,
+        ProviderInstanceConfig config,
+        string sourceText,
+        PolishStyle initialStyle,
+        bool isWaitingOnDemand,
+        bool showDiffByDefault,
+        LanguageCode detectedLanguage)
+    {
+        return new ServiceCardViewModel(
+            config,
+            PopupMode.Polish,
+            sourceText,
+            RetrySingleCardAsync,
+            backTranslateCallback: null,
+            cancelBackTranslateCallback: null,
+            _textDiffService,
+            NotifyLayoutChanged,
+            showDiffByDefault: showDiffByDefault,
+            dispatcher: _dispatcher,
+            writeBackCallback: WriteBackCardAsync,
+            toggleSpeakCallback: ToggleSpeakCardAsync,
+            hasSourceWindow: HasSourceWindow,
+            cardId: cardId,
+            initialPolishStyle: initialStyle,
+            isWaitingOnDemand: isWaitingOnDemand,
+            flyoutOpenedCallback: NotifyInternalFlyoutOpened,
+            flyoutClosedCallback: NotifyInternalFlyoutClosed)
+        {
+            DetectedSourceLanguage = detectedLanguage,
+            TargetLanguage = detectedLanguage,
+        };
+    }
+
+    private async Task StreamTranslateCardsBatchAsync(
+        string text,
+        bool isFromOcr,
+        LanguageCode targetLanguage,
+        AppSettings settings,
+        Dictionary<string, ServiceCardViewModel> translateCardsByProviderId,
+        bool preferPolishForAutoCopy,
+        CancellationToken ct)
+    {
         var request = new TranslationRequest(
             Text: text,
             SourceLanguage: SelectedSourceLanguage.Code,
-            TargetLanguage: routing.TargetLanguage,
-            ApplyTextPreprocessing: false, // Already preprocessed in UI so source box matches translated payload.
-            IsFromOcr: isFromOcr);
+            TargetLanguage: targetLanguage,
+            ApplyTextPreprocessing: false,
+            IsFromOcr: isFromOcr,
+            ProviderInstanceIds: translateCardsByProviderId.Keys.ToList());
 
         try
         {
@@ -1218,7 +1338,7 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
                         return;
                     }
 
-                    cardsById.TryGetValue(update.ProviderInstanceId, out var card);
+                    translateCardsByProviderId.TryGetValue(update.ProviderInstanceId, out var card);
                     if (card is not null)
                     {
                         card.ApplyUpdate(update);
@@ -1226,19 +1346,20 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
                         if (update.State == ProviderStreamState.Completed &&
                             settings.AutoBackTranslate &&
                             !string.IsNullOrWhiteSpace(card.TranslatedText) &&
-                            _autoBackTranslatedCardIds.Add(card.ProviderInstanceId))
+                            _autoBackTranslatedCardIds.Add(card.CardId))
                         {
-                            _ = BackTranslateCardAsync(card.ProviderInstanceId, ct, expandCard: false);
+                            _ = BackTranslateCardAsync(card.CardId, ct, expandCard: false);
                         }
                     }
 
                     if (update.DetectedSourceLanguage is { IsAuto: false } detected)
                     {
                         _lastDetectedSource = detected;
-                        UpdateDetectedBadge(detected, update.TargetLanguage);
+                        OnPropertyChanged(nameof(SourceLanguageButtonText));
                     }
 
                     if (update.State == ProviderStreamState.Completed &&
+                        !preferPolishForAutoCopy &&
                         !_autoCopiedInCurrentRun &&
                         settings.Window.AutoCopyFirstResult &&
                         !string.IsNullOrWhiteSpace(update.AccumulatedText))
@@ -1257,7 +1378,7 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
         }
         catch (OperationCanceledException)
         {
-            // Expected when a newer request starts, mode switches, or popup is dismissed.
+            // Expected when a newer request starts or popup is dismissed.
         }
         catch (Exception ex)
         {
@@ -1265,64 +1386,29 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
         }
     }
 
-    private async Task ExecutePolishAsync(string text)
+    private async Task StreamPolishCardInternalAsync(
+        ServiceCardViewModel card,
+        ProviderInstanceConfig? config,
+        string text,
+        LanguageCode detectedLanguage,
+        AppSettings settings,
+        bool allowAutoCopy,
+        CancellationToken parentCt)
     {
-        CancelActiveTranslation();
-        _autoCopiedInCurrentRun = false;
+        var linkedCts = parentCt.CanBeCanceled
+            ? CancellationTokenSource.CreateLinkedTokenSource(parentCt)
+            : new CancellationTokenSource();
 
-        var settings = _settingsStore.Current;
-        var eligibleProviders = SafeGetEligiblePolishProviders();
-
-        HasEligiblePolishProviders = eligibleProviders.Count > 0;
-        ServiceCards.Clear();
-
-        var detection = _languageDetector.Detect(text);
-        _lastDetectedSource = detection.Language;
-        UpdatePolishBadge(detection.Language, SelectedPolishStyle);
-
-        if (eligibleProviders.Count == 0)
+        if (_singleRetryCtsMap.Remove(card.CardId, out var previous))
         {
-            OnPropertyChanged(nameof(ShowNoEnabledProvidersHint));
-            OnPropertyChanged(nameof(ShowEmptyHint));
-            NotifyLayoutChanged();
-            return;
+            try { previous.Cancel(); } catch { }
+            previous.Dispose();
         }
 
-        var showDiffByDefault = settings.Polish?.ShowDiffByDefault ?? false;
-        var cardsById = new Dictionary<string, ServiceCardViewModel>(StringComparer.Ordinal);
-        foreach (var provider in eligibleProviders)
-        {
-            var card = new ServiceCardViewModel(
-                provider,
-                PopupMode.Polish,
-                text,
-                RetrySingleProviderAsync,
-                backTranslateCallback: null,
-                cancelBackTranslateCallback: null,
-                _textDiffService,
-                NotifyLayoutChanged,
-                showDiffByDefault: showDiffByDefault,
-                dispatcher: _dispatcher,
-                writeBackCallback: id => WriteBackCardAsync(id),
-                toggleSpeakCallback: ToggleSpeakCardAsync,
-                hasSourceWindow: HasSourceWindow)
-            {
-                DetectedSourceLanguage = detection.Language,
-                TargetLanguage = detection.Language,
-            };
+        _singleRetryCtsMap[card.CardId] = linkedCts;
+        var ct = linkedCts.Token;
 
-            ServiceCards.Add(card);
-            cardsById[provider.Id] = card;
-        }
-
-        OnPropertyChanged(nameof(ShowEmptyHint));
-        NotifyLayoutChanged();
-
-        var cts = new CancellationTokenSource();
-        _activeTranslationCts = cts;
-        var ct = cts.Token;
-
-        var request = BuildPolishRequest(text, detection.Language, settings, providerInstanceIds: null);
+        var request = BuildPolishRequestForCard(text, detectedLanguage, settings, card, config);
 
         try
         {
@@ -1335,16 +1421,19 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
                         return;
                     }
 
-                    cardsById.TryGetValue(update.ProviderInstanceId, out var card);
-                    card?.ApplyUpdate(update);
+                    if (string.Equals(update.ProviderInstanceId, card.ProviderInstanceId, StringComparison.Ordinal))
+                    {
+                        card.ApplyUpdate(update);
+                    }
 
                     if (update.DetectedSourceLanguage is { IsAuto: false } detected)
                     {
                         _lastDetectedSource = detected;
-                        UpdatePolishBadge(detected, SelectedPolishStyle);
+                        OnPropertyChanged(nameof(SourceLanguageButtonText));
                     }
 
-                    if (update.State == ProviderStreamState.Completed &&
+                    if (allowAutoCopy &&
+                        update.State == ProviderStreamState.Completed &&
                         !_autoCopiedInCurrentRun &&
                         settings.Window.AutoCopyFirstResult &&
                         !string.IsNullOrWhiteSpace(update.AccumulatedText))
@@ -1352,10 +1441,7 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
                         if (ClipboardLoopGuard.TryCopyText(update.AccumulatedText))
                         {
                             _autoCopiedInCurrentRun = true;
-                            if (card is not null)
-                            {
-                                card.IsAutoCopied = true;
-                            }
+                            card.IsAutoCopied = true;
                         }
                     }
                 });
@@ -1363,20 +1449,53 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
         }
         catch (OperationCanceledException)
         {
-            // Expected when a newer request starts, mode switches, or popup is dismissed.
+            // Expected when card style changes, newer request starts, or popup is dismissed.
         }
         catch (Exception ex)
         {
-            EnqueueUi(() => ShowStatusError($"润色调度发生错误：{ex.Message}"));
+            EnqueueUi(() =>
+            {
+                if (!ct.IsCancellationRequested)
+                {
+                    card.ApplyUpdate(new ProviderStreamUpdate(
+                        card.ProviderInstanceId,
+                        card.DisplayName,
+                        card.ProviderKind,
+                        ProviderStreamState.Failed,
+                        string.Empty,
+                        card.TranslatedText,
+                        null,
+                        detectedLanguage,
+                        ex.Message,
+                        TimeSpan.Zero));
+                }
+            });
+        }
+        finally
+        {
+            if (_singleRetryCtsMap.TryGetValue(card.CardId, out var active) && ReferenceEquals(active, linkedCts))
+            {
+                _singleRetryCtsMap.Remove(card.CardId);
+            }
+
+            linkedCts.Dispose();
         }
     }
 
-    private Task RetrySingleProviderAsync(string providerInstanceId) =>
-        CurrentMode == PopupMode.Polish
-            ? RetrySinglePolishProviderAsync(providerInstanceId)
-            : RetrySingleTranslateProviderAsync(providerInstanceId);
+    private Task RetrySingleCardAsync(string cardId)
+    {
+        var card = FindCardById(cardId);
+        if (card is null)
+        {
+            return Task.CompletedTask;
+        }
 
-    private async Task RetrySingleTranslateProviderAsync(string providerInstanceId)
+        return card.IsPolishMode
+            ? RetrySinglePolishCardAsync(cardId)
+            : RetrySingleTranslateCardAsync(cardId);
+    }
+
+    private async Task RetrySingleTranslateCardAsync(string cardId)
     {
         var text = SourceText?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(text))
@@ -1384,14 +1503,14 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
             return;
         }
 
-        var card = ServiceCards.FirstOrDefault(c => string.Equals(c.ProviderInstanceId, providerInstanceId, StringComparison.Ordinal));
+        var card = FindCardById(cardId);
         if (card is null)
         {
             return;
         }
 
-        CancelBackTranslationForCard(providerInstanceId);
-        ReplaceCtsInMap(_singleRetryCtsMap, providerInstanceId, out var cts);
+        CancelBackTranslationForCard(cardId);
+        ReplaceCtsInMap(_singleRetryCtsMap, cardId, out var cts);
         var ct = cts.Token;
 
         card.ResetForRetry();
@@ -1413,7 +1532,7 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
             TargetLanguage: routing.TargetLanguage,
             ApplyTextPreprocessing: false,
             IsFromOcr: _lastRequestWasFromOcr,
-            ProviderInstanceIds: [providerInstanceId]);
+            ProviderInstanceIds: [card.ProviderInstanceId]);
 
         var autoBackTriggered = false;
 
@@ -1424,7 +1543,7 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
                 EnqueueUi(() =>
                 {
                     if (!ct.IsCancellationRequested &&
-                        string.Equals(update.ProviderInstanceId, providerInstanceId, StringComparison.Ordinal))
+                        string.Equals(update.ProviderInstanceId, card.ProviderInstanceId, StringComparison.Ordinal))
                     {
                         card.ApplyUpdate(update);
 
@@ -1434,7 +1553,7 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
                             !autoBackTriggered)
                         {
                             autoBackTriggered = true;
-                            _ = BackTranslateCardAsync(providerInstanceId, ct, expandCard: false);
+                            _ = BackTranslateCardAsync(cardId, ct, expandCard: false);
                         }
                     }
                 });
@@ -1447,7 +1566,7 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
         catch (Exception ex)
         {
             EnqueueUi(() => card.ApplyUpdate(new ProviderStreamUpdate(
-                providerInstanceId,
+                card.ProviderInstanceId,
                 card.DisplayName,
                 card.ProviderKind,
                 ProviderStreamState.Failed,
@@ -1460,7 +1579,7 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
         }
     }
 
-    private async Task RetrySinglePolishProviderAsync(string providerInstanceId)
+    private async Task RetrySinglePolishCardAsync(string cardId)
     {
         var text = SourceText?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(text))
@@ -1468,75 +1587,50 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
             return;
         }
 
-        var card = ServiceCards.FirstOrDefault(c => string.Equals(c.ProviderInstanceId, providerInstanceId, StringComparison.Ordinal));
+        var card = FindCardById(cardId);
         if (card is null)
         {
             return;
         }
 
-        ReplaceCtsInMap(_singleRetryCtsMap, providerInstanceId, out var cts);
-        var ct = cts.Token;
-
         card.ResetForRetry();
 
         var settings = _settingsStore.Current;
+        var config = settings.Providers.FirstOrDefault(p =>
+            string.Equals(p.Id, card.ProviderInstanceId, StringComparison.Ordinal));
         var detection = _languageDetector.Detect(text);
-        var request = BuildPolishRequest(text, detection.Language, settings, providerInstanceIds: [providerInstanceId]);
+        var parentCt = _activeTranslationCts?.Token ?? CancellationToken.None;
 
-        try
-        {
-            await foreach (var update in _polishOrchestrator.PolishParallelAsync(request, ct))
-            {
-                EnqueueUi(() =>
-                {
-                    if (!ct.IsCancellationRequested &&
-                        string.Equals(update.ProviderInstanceId, providerInstanceId, StringComparison.Ordinal))
-                    {
-                        card.ApplyUpdate(update);
-                    }
-                });
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            // Cancelled cleanly.
-        }
-        catch (Exception ex)
-        {
-            EnqueueUi(() => card.ApplyUpdate(new ProviderStreamUpdate(
-                providerInstanceId,
-                card.DisplayName,
-                card.ProviderKind,
-                ProviderStreamState.Failed,
-                string.Empty,
-                card.TranslatedText,
-                null,
-                detection.Language,
-                ex.Message,
-                TimeSpan.Zero)));
-        }
+        await StreamPolishCardInternalAsync(
+            card,
+            config,
+            text,
+            detection.Language,
+            settings,
+            allowAutoCopy: false,
+            parentCt);
     }
 
-    private Task BackTranslateCardManualAsync(string providerInstanceId) =>
-        BackTranslateCardAsync(providerInstanceId, CancellationToken.None, expandCard: true);
+    private Task BackTranslateCardManualAsync(string cardId) =>
+        BackTranslateCardAsync(cardId, CancellationToken.None, expandCard: true);
 
     private async Task BackTranslateCardAsync(
-        string providerInstanceId,
+        string cardId,
         CancellationToken parentToken,
         bool expandCard)
     {
-        var card = ServiceCards.FirstOrDefault(c => string.Equals(c.ProviderInstanceId, providerInstanceId, StringComparison.Ordinal));
+        var card = FindCardById(cardId);
         if (card is null || !card.IsTranslateMode || string.IsNullOrWhiteSpace(card.TranslatedText))
         {
             return;
         }
 
-        CancelBackTranslationForCard(providerInstanceId);
+        CancelBackTranslationForCard(cardId);
 
         var cts = parentToken.CanBeCanceled
             ? CancellationTokenSource.CreateLinkedTokenSource(parentToken)
             : new CancellationTokenSource();
-        _backTranslateCtsMap[providerInstanceId] = cts;
+        _backTranslateCtsMap[cardId] = cts;
         var ct = cts.Token;
 
         var translatedLang = !card.TargetLanguage.IsAuto ? card.TargetLanguage : _lastEffectiveTarget;
@@ -1545,7 +1639,7 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
         card.BeginBackTranslation(backTarget, expandCard);
 
         var request = new BackTranslationRequest(
-            ProviderInstanceId: providerInstanceId,
+            ProviderInstanceId: card.ProviderInstanceId,
             TranslatedText: card.TranslatedText,
             TranslatedLanguage: translatedLang,
             BackTargetLanguage: backTarget);
@@ -1574,7 +1668,7 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
                 if (!ct.IsCancellationRequested)
                 {
                     card.ApplyBackTranslationUpdate(new ProviderStreamUpdate(
-                        providerInstanceId,
+                        card.ProviderInstanceId,
                         card.DisplayName,
                         card.ProviderKind,
                         ProviderStreamState.Failed,
@@ -1589,14 +1683,18 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
         }
         finally
         {
-            if (_backTranslateCtsMap.TryGetValue(providerInstanceId, out var active) && ReferenceEquals(active, cts))
+            if (_backTranslateCtsMap.TryGetValue(cardId, out var active) && ReferenceEquals(active, cts))
             {
-                _backTranslateCtsMap.Remove(providerInstanceId);
+                _backTranslateCtsMap.Remove(cardId);
             }
 
             cts.Dispose();
         }
     }
+
+    private ServiceCardViewModel? FindCardById(string cardId) =>
+        ServiceCards.FirstOrDefault(c => string.Equals(c.CardId, cardId, StringComparison.Ordinal))
+        ?? ServiceCards.FirstOrDefault(c => string.Equals(c.ProviderInstanceId, cardId, StringComparison.Ordinal));
 
     private LanguageCode ResolveBackTargetLanguage(ServiceCardViewModel card)
     {
@@ -1627,9 +1725,9 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
         return LanguageCode.Auto;
     }
 
-    private void CancelBackTranslationForCard(string providerInstanceId)
+    private void CancelBackTranslationForCard(string cardId)
     {
-        if (_backTranslateCtsMap.Remove(providerInstanceId, out var prev))
+        if (_backTranslateCtsMap.Remove(cardId, out var prev))
         {
             try
             {
@@ -1644,22 +1742,33 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
         }
     }
 
-    private PolishRequest BuildPolishRequest(
+    private static PolishRequest BuildPolishRequestForCard(
         string text,
         LanguageCode detectedLanguage,
         AppSettings settings,
-        IReadOnlyList<string>? providerInstanceIds)
+        ServiceCardViewModel card,
+        ProviderInstanceConfig? config)
     {
-        var style = SelectedPolishStyle?.Style ?? PolishStyle.General;
+        var style = card.CardPolishStyle;
         string? customPrompt = null;
+
         if (style == PolishStyle.Custom)
         {
-            var fallback = string.IsNullOrWhiteSpace(settings.Polish?.CustomPrompt)
-                ? PolishConfig.DefaultCustomPrompt
-                : settings.Polish.CustomPrompt;
-            customPrompt = string.IsNullOrWhiteSpace(InlineCustomPrompt)
-                ? fallback
-                : InlineCustomPrompt.Trim();
+            if (config is not null &&
+                !string.IsNullOrWhiteSpace(config.SystemPrompt) &&
+                !string.Equals(
+                    config.SystemPrompt.Trim(),
+                    ProviderInstanceConfig.DefaultOpenAiSystemPrompt,
+                    StringComparison.Ordinal))
+            {
+                customPrompt = config.SystemPrompt.Trim();
+            }
+            else
+            {
+                customPrompt = string.IsNullOrWhiteSpace(settings.Polish?.CustomPrompt)
+                    ? PolishConfig.DefaultCustomPrompt
+                    : settings.Polish.CustomPrompt.Trim();
+            }
         }
 
         return new PolishRequest(
@@ -1668,33 +1777,17 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
             CustomPrompt: customPrompt,
             PreferredLanguage: detectedLanguage.IsAuto ? null : detectedLanguage,
             ApplyTextPreprocessing: false,
-            ProviderInstanceIds: providerInstanceIds);
+            ProviderInstanceIds: [card.ProviderInstanceId]);
     }
 
-    private void SyncPolishDefaultsFromSettings()
-    {
-        var polish = _settingsStore.Current.Polish ?? new PolishConfig();
-        _isSuppressingLanguageReaction = true;
-        try
-        {
-            SelectedPolishStyle = PolishStyleOptions.FirstOrDefault(x => x.Style == polish.DefaultStyle)
-                ?? PolishStyleOptions[0];
-            InlineCustomPrompt = string.IsNullOrWhiteSpace(polish.CustomPrompt)
-                ? PolishConfig.DefaultCustomPrompt
-                : polish.CustomPrompt;
-            _lastSettingDefaultPolishStyle = polish.DefaultStyle;
-            _lastSettingCustomPrompt = InlineCustomPrompt;
-        }
-        finally
-        {
-            _isSuppressingLanguageReaction = false;
-        }
-    }
+    private static bool HasAnyUsableEnabledProvider(AppSettings settings) =>
+        settings.Providers.Any(p =>
+            p.Enabled &&
+            (p.Role == ProviderRole.Translate || p.Kind == ProviderKind.OpenAiCompatible));
 
     private void RefreshProviderAvailability()
     {
-        HasEnabledProviders = _settingsStore.Current.Providers.Any(p => p.Enabled);
-        HasEligiblePolishProviders = SafeGetEligiblePolishProviders().Count > 0;
+        HasEnabledProviders = HasAnyUsableEnabledProvider(_settingsStore.Current);
     }
 
     private IReadOnlyList<ProviderInstanceConfig> SafeGetEligiblePolishProviders()
@@ -1707,21 +1800,6 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
         {
             return [];
         }
-    }
-
-    private void UpdateDetectedBadge(LanguageCode detectedSource, LanguageCode target)
-    {
-        var sourceName = detectedSource.IsAuto ? "自动" : detectedSource.NativeName;
-        var targetName = target.IsAuto ? "自动" : target.NativeName;
-        DetectedLanguageBadge = $"{sourceName} → {targetName}";
-    }
-
-    private void UpdatePolishBadge(LanguageCode detectedSource, PolishStyleOption? styleOption)
-    {
-        var styleLabel = styleOption?.DisplayLabel ?? "通用流畅";
-        DetectedLanguageBadge = detectedSource.IsAuto
-            ? $"润色 · {styleLabel}"
-            : $"{detectedSource.NativeName} · {styleLabel}";
     }
 
     private void NotifyLayoutChanged()
@@ -1783,6 +1861,23 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
         map.Clear();
     }
 
+    private static string FormatShortLanguageLabel(LanguageCode code) => code.Value switch
+    {
+        "zh-Hans" => "中",
+        "zh-Hant" => "繁",
+        "en" => "英",
+        "ja" => "日",
+        "ko" => "韩",
+        "fr" => "法",
+        "de" => "德",
+        "es" => "西",
+        "ru" => "俄",
+        "it" => "意",
+        "pt" => "葡",
+        "ar" => "阿",
+        _ => code.NativeName,
+    };
+
     private static ObservableCollection<LanguageOption> BuildSourceLanguageOptions()
     {
         var list = new ObservableCollection<LanguageOption>();
@@ -1800,7 +1895,7 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
         {
             new(
                 LanguageCode.Auto,
-                $"自动 ({settings.PrimaryTargetLanguage.NativeName}↔{settings.SecondaryTargetLanguage.NativeName})"),
+                $"自动 ({FormatShortLanguageLabel(settings.PrimaryTargetLanguage)}↔{FormatShortLanguageLabel(settings.SecondaryTargetLanguage)})"),
         };
 
         foreach (var lang in LanguageCode.SelectableTargets)

@@ -22,8 +22,8 @@
             x:Name="PillBorder"
             CornerRadius="8"
             BorderThickness="1"
-            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-            Background="{ThemeResource AccentFillColorDefaultBrush}">
+            BorderBrush="{ThemeResource SurfaceStrokeColorFlyoutBrush}"
+            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
             <Border.ContextFlyout>
                 <MenuFlyout
                     x:Name="HoverContextFlyout"
@@ -58,66 +58,25 @@
                 </MenuFlyout>
             </Border.ContextFlyout>
 
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition x:Name="PolishColumn" Width="0" />
-                </Grid.ColumnDefinitions>
-
-                <Button
-                    x:Name="TranslateActionButton"
-                    Grid.Column="0"
-                    HorizontalAlignment="Stretch"
-                    VerticalAlignment="Stretch"
-                    Padding="0"
-                    CornerRadius="7"
-                    BorderThickness="0"
-                    Background="Transparent"
-                    AutomationProperties.Name="翻译选中文本"
-                    ToolTipService.ToolTip="翻译选中文本（右键管理划词）"
-                    Click="TranslateActionButton_Click">
-                    <TextBlock
-                        Text="译"
-                        FontSize="14"
-                        FontWeight="SemiBold"
-                        Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}"
-                        HorizontalAlignment="Center"
-                        VerticalAlignment="Center" />
-                </Button>
-
-                <Border
-                    x:Name="ActionDivider"
-                    Grid.Column="1"
-                    Visibility="Collapsed"
-                    Width="1"
-                    Height="16"
-                    VerticalAlignment="Center"
-                    Opacity="0.35"
-                    Background="{ThemeResource TextOnAccentFillColorPrimaryBrush}" />
-
-                <Button
-                    x:Name="PolishActionButton"
-                    Grid.Column="2"
-                    Visibility="Collapsed"
-                    HorizontalAlignment="Stretch"
-                    VerticalAlignment="Stretch"
-                    Padding="0"
-                    CornerRadius="7"
-                    BorderThickness="0"
-                    Background="Transparent"
-                    AutomationProperties.Name="润色选中文本"
-                    ToolTipService.ToolTip="润色选中文本"
-                    Click="PolishActionButton_Click">
-                    <TextBlock
-                        Text="润"
-                        FontSize="14"
-                        FontWeight="SemiBold"
-                        Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}"
-                        HorizontalAlignment="Center"
-                        VerticalAlignment="Center" />
-                </Button>
-            </Grid>
+            <Button
+                x:Name="TranslateActionButton"
+                HorizontalAlignment="Stretch"
+                VerticalAlignment="Stretch"
+                Padding="0"
+                CornerRadius="7"
+                BorderThickness="0"
+                Background="Transparent"
+                AutomationProperties.Name="翻译选中文本"
+                ToolTipService.ToolTip="翻译选中文本（右键管理划词）"
+                Click="TranslateActionButton_Click">
+                <TextBlock
+                    Text="译"
+                    FontSize="14"
+                    FontWeight="SemiBold"
+                    Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center" />
+            </Button>
         </Border>
     </Grid>
 </winex:WindowEx>

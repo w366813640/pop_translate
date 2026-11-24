@@ -9,45 +9,74 @@
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
             </ResourceDictionary.MergedDictionaries>
 
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Default">
+                    <SolidColorBrush x:Key="PopTranslateAccentSubtleBackgroundBrush" Color="#2460CDFF" />
+                    <SolidColorBrush x:Key="PopTranslateAccentSubtleBorderBrush" Color="#3860CDFF" />
+                    <SolidColorBrush x:Key="PopTranslatePolishSubtleBackgroundBrush" Color="#28A78BFA" />
+                    <SolidColorBrush x:Key="PopTranslatePolishSubtleBorderBrush" Color="#40A78BFA" />
+                    <SolidColorBrush x:Key="PopTranslatePolishAccentForegroundBrush" Color="#FFC4B5FD" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Dark">
+                    <SolidColorBrush x:Key="PopTranslateAccentSubtleBackgroundBrush" Color="#2460CDFF" />
+                    <SolidColorBrush x:Key="PopTranslateAccentSubtleBorderBrush" Color="#3860CDFF" />
+                    <SolidColorBrush x:Key="PopTranslatePolishSubtleBackgroundBrush" Color="#28A78BFA" />
+                    <SolidColorBrush x:Key="PopTranslatePolishSubtleBorderBrush" Color="#40A78BFA" />
+                    <SolidColorBrush x:Key="PopTranslatePolishAccentForegroundBrush" Color="#FFC4B5FD" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Light">
+                    <SolidColorBrush x:Key="PopTranslateAccentSubtleBackgroundBrush" Color="#1A0067C0" />
+                    <SolidColorBrush x:Key="PopTranslateAccentSubtleBorderBrush" Color="#2E0067C0" />
+                    <SolidColorBrush x:Key="PopTranslatePolishSubtleBackgroundBrush" Color="#186D28D9" />
+                    <SolidColorBrush x:Key="PopTranslatePolishSubtleBorderBrush" Color="#306D28D9" />
+                    <SolidColorBrush x:Key="PopTranslatePolishAccentForegroundBrush" Color="#FF6D28D9" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="HighContrast">
+                    <SolidColorBrush x:Key="PopTranslateAccentSubtleBackgroundBrush" Color="#2460CDFF" />
+                    <SolidColorBrush x:Key="PopTranslateAccentSubtleBorderBrush" Color="#3860CDFF" />
+                    <SolidColorBrush x:Key="PopTranslatePolishSubtleBackgroundBrush" Color="#28A78BFA" />
+                    <SolidColorBrush x:Key="PopTranslatePolishSubtleBorderBrush" Color="#40A78BFA" />
+                    <SolidColorBrush x:Key="PopTranslatePolishAccentForegroundBrush" Color="#FFC4B5FD" />
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
+
             <!-- Shared Value Converters -->
             <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter" />
             <converters:InverseBoolToVisibilityConverter x:Key="InverseBoolToVisibilityConverter" />
             <converters:StringNotEmptyToVisibilityConverter x:Key="StringNotEmptyToVisibilityConverter" />
 
-            <!-- Fluent 2 Compact Toolbar Icon Button -->
+            <!-- Fluent 2 Header Window Micro-Toolbar Ghost Button (32x32, CornerRadius=6) -->
+            <Style x:Key="PopTranslateHeaderGhostButtonStyle" TargetType="Button">
+                <Setter Property="Width" Value="32" />
+                <Setter Property="Height" Value="32" />
+                <Setter Property="Padding" Value="0" />
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="CornerRadius" Value="6" />
+                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                <Setter Property="VerticalContentAlignment" Value="Stretch" />
+            </Style>
+
+            <!-- Fluent 2 Compact Language Selector Pill Button (Height=32, CornerRadius=6) -->
+            <Style x:Key="PopTranslateLanguagePillButtonStyle" TargetType="Button">
+                <Setter Property="Height" Value="32" />
+                <Setter Property="Padding" Value="10,0,9,0" />
+                <Setter Property="Background" Value="{ThemeResource SubtleFillColorSecondaryBrush}" />
+                <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="CornerRadius" Value="6" />
+                <Setter Property="HorizontalContentAlignment" Value="Center" />
+                <Setter Property="VerticalContentAlignment" Value="Center" />
+            </Style>
+
+            <!-- Fluent 2 Compact Card Action Ghost Icon Button (28x28, CornerRadius=6) -->
             <Style x:Key="PopTranslateMicroIconButtonStyle" TargetType="Button">
                 <Setter Property="Width" Value="28" />
                 <Setter Property="Height" Value="28" />
                 <Setter Property="Padding" Value="0" />
                 <Setter Property="Background" Value="Transparent" />
                 <Setter Property="BorderThickness" Value="0" />
-                <Setter Property="CornerRadius" Value="5" />
-                <Setter Property="HorizontalContentAlignment" Value="Center" />
-                <Setter Property="VerticalContentAlignment" Value="Center" />
-            </Style>
-
-            <!-- Fluent 2 Compact Toolbar Toggle Button -->
-            <Style x:Key="PopTranslateMicroToggleButtonStyle" TargetType="ToggleButton">
-                <Setter Property="Width" Value="28" />
-                <Setter Property="Height" Value="28" />
-                <Setter Property="Padding" Value="0" />
-                <Setter Property="Background" Value="Transparent" />
-                <Setter Property="BorderThickness" Value="0" />
-                <Setter Property="CornerRadius" Value="5" />
-                <Setter Property="HorizontalContentAlignment" Value="Center" />
-                <Setter Property="VerticalContentAlignment" Value="Center" />
-            </Style>
-
-            <!-- Fluent 2 Compact Segmented Mode Pill Toggle Button -->
-            <Style x:Key="PopTranslateModePillToggleButtonStyle" TargetType="ToggleButton">
-                <Setter Property="Height" Value="24" />
-                <Setter Property="MinWidth" Value="48" />
-                <Setter Property="Padding" Value="10,0" />
-                <Setter Property="FontSize" Value="12" />
-                <Setter Property="FontWeight" Value="SemiBold" />
-                <Setter Property="Background" Value="Transparent" />
-                <Setter Property="BorderThickness" Value="0" />
-                <Setter Property="CornerRadius" Value="5" />
+                <Setter Property="CornerRadius" Value="6" />
                 <Setter Property="HorizontalContentAlignment" Value="Center" />
                 <Setter Property="VerticalContentAlignment" Value="Center" />
             </Style>
@@ -55,7 +84,7 @@
             <!-- Fluent 2 Compact Text+Icon Action Chip Button -->
             <Style x:Key="PopTranslateMicroChipButtonStyle" TargetType="Button">
                 <Setter Property="Height" Value="26" />
-                <Setter Property="Padding" Value="7,0" />
+                <Setter Property="Padding" Value="8,0" />
                 <Setter Property="Background" Value="Transparent" />
                 <Setter Property="BorderThickness" Value="0" />
                 <Setter Property="CornerRadius" Value="5" />
@@ -63,10 +92,11 @@
                 <Setter Property="VerticalContentAlignment" Value="Center" />
             </Style>
 
-            <!-- Fluent 2 Compact Text+Icon Action Chip Toggle Button -->
-            <Style x:Key="PopTranslateMicroChipToggleButtonStyle" TargetType="ToggleButton">
-                <Setter Property="Height" Value="26" />
-                <Setter Property="Padding" Value="7,0" />
+            <!-- Fluent 2 Quiet Contextual Bottom Link Button -->
+            <Style x:Key="PopTranslateContextualLinkButtonStyle" TargetType="Button">
+                <Setter Property="Height" Value="24" />
+                <Setter Property="MinWidth" Value="0" />
+                <Setter Property="Padding" Value="5,0" />
                 <Setter Property="Background" Value="Transparent" />
                 <Setter Property="BorderThickness" Value="0" />
                 <Setter Property="CornerRadius" Value="5" />

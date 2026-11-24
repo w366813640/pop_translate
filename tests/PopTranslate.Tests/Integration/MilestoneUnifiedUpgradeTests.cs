@@ -832,6 +832,172 @@ public sealed class MilestoneUnifiedUpgradeTests : IDisposable
         Assert.NotEmpty(recoveredFromNull.Providers);
     }
 
+    [Fact]
+    public async Task DedicatedPolishProviderRole_TranslationSkipsPolishRole_WhilePolishPrefersDedicatedRoleAndSupportsExplicitIds()
+    {
+        var capturedRequests = new List<(string AuthToken, string SystemPrompt)>();
+        var handler = new DelegateHttpHandler(async (req, ct) =>
+        {
+            var url = req.RequestUri!.AbsoluteUri;
+            if (url.Contains("google.com/translate_a/", StringComparison.Ordinal) ||
+                url.Contains("googleapis.com/translate_a/", StringComparison.Ordinal))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("""[["你好世界","en"]]""", Encoding.UTF8, "application/json"),
+                };
+            }
+
+            var body = await req.Content!.ReadAsStringAsync(ct);
+            using var doc = JsonDocument.Parse(body);
+            var sysPrompt = doc.RootElement.GetProperty("messages")[0].GetProperty("content").GetString() ?? string.Empty;
+            var token = req.Headers.Authorization?.Parameter ?? string.Empty;
+            lock (capturedRequests)
+            {
+                capturedRequests.Add((token, sysPrompt));
+            }
+
+            var sse =
+                $"data: {{\"choices\":[{{\"delta\":{{\"content\":\"[{token}]\"}}}}]}}\n\n" +
+                "data: [DONE]\n\n";
+            var resp = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(sse, Encoding.UTF8),
+            };
+            resp.Content.Headers.ContentType = new MediaTypeHeaderValue("text/event-stream");
+            return resp;
+        });
+
+        var store = new JsonSettingsStore(_protector, _settingsPath);
+        var settings = AppSettings.CreateDefault();
+        settings.Providers =
+        [
+            new ProviderInstanceConfig
+            {
+                Id = "free-translate",
+                DisplayName = "Google Free",
+                Kind = ProviderKind.FreeTraditional,
+                Role = ProviderRole.Translate,
+                FreeEngine = FreeTranslatorEngine.Google,
+                Enabled = true,
+                SortOrder = 0,
+            },
+            new ProviderInstanceConfig
+            {
+                Id = "llm-translate",
+                DisplayName = "LLM Translator",
+                Kind = ProviderKind.OpenAiCompatible,
+                Role = ProviderRole.Translate,
+                Enabled = true,
+                SortOrder = 1,
+                BaseUrl = "https://mock-llm.local/v1",
+                Model = "gpt-4o-mini",
+                EncryptedApiKey = _protector.Protect("sk-llm-translate"),
+            },
+            new ProviderInstanceConfig
+            {
+                Id = "llm-polish-dedicated",
+                DisplayName = "AI 文本润色",
+                Kind = ProviderKind.OpenAiCompatible,
+                Role = ProviderRole.Polish,
+                TriggerMode = PolishTriggerMode.OnDemand,
+                DefaultPolishStyle = PolishStyle.Academic,
+                Enabled = true,
+                SortOrder = 2,
+                BaseUrl = "https://mock-llm.local/v1",
+                Model = "gpt-4o-mini",
+                EncryptedApiKey = _protector.Protect("sk-llm-polish"),
+                SystemPrompt = "Use crisp executive bullet phrasing.",
+            },
+            new ProviderInstanceConfig
+            {
+                Id = "llm-polish-disabled",
+                DisplayName = "Disabled Polish",
+                Kind = ProviderKind.OpenAiCompatible,
+                Role = ProviderRole.Polish,
+                TriggerMode = PolishTriggerMode.AutoParallel,
+                Enabled = false,
+                SortOrder = 3,
+                BaseUrl = "https://mock-llm.local/v1",
+                Model = "gpt-4o-mini",
+                EncryptedApiKey = _protector.Protect("sk-llm-disabled"),
+            },
+        ];
+        await store.SaveAsync(settings);
+
+        // Verify JSON persistence and Clone() fidelity for Role, TriggerMode, and DefaultPolishStyle
+        var reloaded = await store.LoadAsync();
+        var dedicatedReloaded = reloaded.Providers.Single(p => p.Id == "llm-polish-dedicated");
+        var dedicatedCloned = dedicatedReloaded.Clone();
+        Assert.Equal(ProviderRole.Polish, dedicatedCloned.Role);
+        Assert.Equal(PolishTriggerMode.OnDemand, dedicatedCloned.TriggerMode);
+        Assert.Equal(PolishStyle.Academic, dedicatedCloned.DefaultPolishStyle);
+
+        var factory = new StubProxyHttpClientFactory(handler);
+        var detector = new LocalLanguageDetector();
+        var preprocessor = new TextPreprocessor();
+
+        var translationOrchestrator = new TranslationOrchestrator(
+            store,
+            preprocessor,
+            new DualTargetLanguageRouter(detector),
+            [
+                new FreeTraditionalTranslationProvider(factory),
+                new OpenAiCompatibleTranslationProvider(factory, _protector, store),
+            ]);
+
+        var polishOrchestrator = new PolishOrchestrator(
+            store,
+            preprocessor,
+            detector,
+            [new OpenAiCompatiblePolishProvider(factory, _protector)]);
+
+        // 1. Default TranslationOrchestrator skips ProviderRole.Polish instances completely
+        var translateBatch = await translationOrchestrator.TranslateAllAsync(new TranslationRequest(
+            Text: "Hello world",
+            SourceLanguage: LanguageCode.English,
+            TargetLanguage: LanguageCode.ChineseSimplified));
+
+        Assert.Equal(["free-translate", "llm-translate"], translateBatch.Results.Select(r => r.ProviderInstanceId).ToList());
+        Assert.All(translateBatch.Results, r => Assert.True(r.IsSuccess, r.ErrorMessage));
+        Assert.DoesNotContain(capturedRequests, r => r.AuthToken == "sk-llm-polish");
+
+        // 2. Default PolishOrchestrator prefers dedicated ProviderRole.Polish instance (and applies instance Custom prompt fallback)
+        Assert.Equal(["llm-polish-dedicated"], polishOrchestrator.GetEligibleProviders().Select(p => p.Id).ToList());
+
+        capturedRequests.Clear();
+        var polishResults = await polishOrchestrator.PolishAllAsync(new PolishRequest(
+            Text: "Draft notes for review.",
+            Style: PolishStyle.Custom,
+            CustomPrompt: null));
+
+        var singlePolish = Assert.Single(polishResults);
+        Assert.Equal("llm-polish-dedicated", singlePolish.ProviderInstanceId);
+        Assert.True(singlePolish.IsSuccess, singlePolish.ErrorMessage);
+        Assert.Equal("[sk-llm-polish]", singlePolish.TranslatedText);
+        var polishCall = Assert.Single(capturedRequests);
+        Assert.Contains("Use crisp executive bullet phrasing.", polishCall.SystemPrompt, StringComparison.Ordinal);
+
+        // 3. Explicit ProviderInstanceIds in PolishOrchestrator runs requested OpenAiCompatible IDs regardless of Role or Enabled
+        var explicitPolish = await polishOrchestrator.PolishAllAsync(new PolishRequest(
+            Text: "Explicit target polish.",
+            Style: PolishStyle.Concise,
+            ProviderInstanceIds: ["free-translate", "llm-translate", "llm-polish-disabled"]));
+
+        Assert.Equal(
+            ["llm-translate", "llm-polish-disabled"],
+            explicitPolish.Select(r => r.ProviderInstanceId).ToList());
+        Assert.All(explicitPolish, r => Assert.True(r.IsSuccess, r.ErrorMessage));
+
+        // 4. Fallback: when 0 dedicated Polish providers are enabled, GetEligibleProviders / PolishAllAsync fall back to enabled OpenAI providers
+        reloaded.Providers.Single(p => p.Id == "llm-polish-dedicated").Enabled = false;
+        await store.SaveAsync(reloaded);
+
+        Assert.Equal(["llm-translate"], polishOrchestrator.GetEligibleProviders().Select(p => p.Id).ToList());
+        var fallbackPolish = await polishOrchestrator.PolishAllAsync(new PolishRequest("Fallback polish.", PolishStyle.General));
+        Assert.Equal("llm-translate", Assert.Single(fallbackPolish).ProviderInstanceId);
+    }
+
     private sealed class DelayedChunkStream : Stream
     {
         private readonly MemoryStream _buffer = new();

@@ -3,393 +3,692 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
-    <Border
-        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-        BorderThickness="1"
-        CornerRadius="8"
-        Padding="0">
-        <StackPanel Spacing="0">
-            <!-- Collapsible Card Header -->
-            <Grid
-                Padding="12,8,8,8"
-                Background="Transparent"
-                ColumnSpacing="6"
-                Tapped="Header_Tapped">
+    <Grid>
+        <!-- Compact 42px On-Demand Polish Bar (0 Tokens Until Triggered) -->
+        <Border
+            Visibility="{x:Bind ViewModel.IsWaitingOnDemand, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+            MinHeight="42"
+            Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="1"
+            CornerRadius="8"
+            Padding="14,6,10,6">
+            <Grid ColumnSpacing="8">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
-                <!-- Provider Badge + Name -->
-                <Grid Grid.Column="0" ColumnSpacing="8" VerticalAlignment="Center">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
-
-                    <Border
-                        Grid.Column="0"
-                        Background="{ThemeResource SubtleFillColorSecondaryBrush}"
-                        CornerRadius="4"
-                        Padding="5,2"
-                        VerticalAlignment="Center">
-                        <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
-                            <FontIcon
-                                FontSize="11"
-                                Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
-                                Glyph="{x:Bind ViewModel.ProviderGlyph, Mode=OneWay}" />
-                            <TextBlock
-                                FontSize="11"
-                                FontWeight="SemiBold"
-                                Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
-                                Text="{x:Bind ViewModel.ProviderBadgeText, Mode=OneWay}" />
-                        </StackPanel>
-                    </Border>
-
-                    <TextBlock
-                        Grid.Column="1"
-                        FontSize="13"
-                        FontWeight="SemiBold"
-                        VerticalAlignment="Center"
-                        TextTrimming="CharacterEllipsis"
-                        Text="{x:Bind ViewModel.DisplayName, Mode=OneWay}" />
-                </Grid>
-
-                <!-- Auto-Copy Badge + Status / Latency -->
+                <!-- Left: [✨ 润色] DisplayName · [StyleLabel ▾] -->
                 <StackPanel
-                    Grid.Column="1"
+                    Grid.Column="0"
                     Orientation="Horizontal"
-                    Spacing="5"
-                    HorizontalAlignment="Right"
+                    Spacing="7"
                     VerticalAlignment="Center">
                     <Border
-                        Visibility="{x:Bind ViewModel.IsAutoCopied, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
-                        Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+                        Background="{ThemeResource PopTranslatePolishSubtleBackgroundBrush}"
                         CornerRadius="4"
-                        Padding="5,1"
+                        Padding="6,2"
                         VerticalAlignment="Center">
                         <TextBlock
-                            FontSize="10"
-                            Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
-                            Text="已自动复制" />
+                            FontSize="11"
+                            FontWeight="SemiBold"
+                            Foreground="{ThemeResource PopTranslatePolishAccentForegroundBrush}"
+                            Text="✨ 润色" />
                     </Border>
-                    <ProgressRing
-                        Width="14"
-                        Height="14"
-                        IsActive="{x:Bind ViewModel.IsLoading, Mode=OneWay}"
-                        Visibility="{x:Bind ViewModel.IsLoading, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
+
                     <TextBlock
-                        FontSize="11"
-                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        FontSize="12.5"
+                        FontWeight="SemiBold"
+                        MaxWidth="150"
+                        TextTrimming="CharacterEllipsis"
                         VerticalAlignment="Center"
-                        Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" />
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Text="{x:Bind ViewModel.DisplayName, Mode=OneWay}" />
+
+                    <TextBlock
+                        FontSize="12"
+                        VerticalAlignment="Center"
+                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                        Text="·" />
+
+                    <Button
+                        Height="24"
+                        Padding="7,0,6,0"
+                        Background="Transparent"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="5"
+                        VerticalAlignment="Center"
+                        AutomationProperties.Name="选择润色风格并运行"
+                        ToolTipService.ToolTip="切换润色风格并立即执行润色">
+                        <Button.Flyout>
+                            <MenuFlyout
+                                Placement="BottomEdgeAlignedLeft"
+                                ShouldConstrainToRootBounds="False"
+                                Opening="PolishStyleFlyout_Opening"
+                                Closed="PolishStyleFlyout_Closed" />
+                        </Button.Flyout>
+                        <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                            <TextBlock
+                                FontSize="11.5"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                VerticalAlignment="Center"
+                                Text="{x:Bind ViewModel.CardPolishStyleLabel, Mode=OneWay}" />
+                            <FontIcon
+                                FontSize="8"
+                                Glyph="&#xE70D;"
+                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
                 </StackPanel>
 
-                <!-- Action Micro-Buttons -->
-                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
-                    <!-- One-Click Write-Back (Replace Selected Text in Source Window) -->
-                    <Button
-                        Style="{StaticResource PopTranslateMicroChipButtonStyle}"
-                        Visibility="{x:Bind ViewModel.ShowWriteBackButton, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
-                        Command="{x:Bind ViewModel.WriteBackCommand, Mode=OneWay}"
-                        IsEnabled="{x:Bind ViewModel.CanWriteBack, Mode=OneWay}"
-                        AutomationProperties.Name="回填替换原文"
-                        ToolTipService.ToolTip="{x:Bind ViewModel.WriteBackTooltip, Mode=OneWay}">
-                        <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
-                            <FontIcon FontSize="11" Glyph="{x:Bind ViewModel.WriteBackGlyph, Mode=OneWay}" />
-                            <TextBlock FontSize="11" Text="回填" VerticalAlignment="Center" />
+                <!-- Right: [▶ 点击润色] Pill -->
+                <Button
+                    Grid.Column="1"
+                    Padding="0"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    CornerRadius="6"
+                    VerticalAlignment="Center"
+                    Command="{x:Bind ViewModel.RunOnDemandPolishCommand, Mode=OneWay}"
+                    AutomationProperties.Name="点击润色"
+                    ToolTipService.ToolTip="立即使用此 AI 服务润色原文">
+                    <Border
+                        Background="{ThemeResource PopTranslatePolishSubtleBackgroundBrush}"
+                        BorderBrush="{ThemeResource PopTranslatePolishSubtleBorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="6"
+                        Padding="10,4">
+                        <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
+                            <FontIcon
+                                FontSize="10"
+                                Glyph="&#xE768;"
+                                Foreground="{ThemeResource PopTranslatePolishAccentForegroundBrush}" />
+                            <TextBlock
+                                FontSize="11.5"
+                                FontWeight="SemiBold"
+                                Foreground="{ThemeResource PopTranslatePolishAccentForegroundBrush}"
+                                Text="点击润色" />
                         </StackPanel>
-                    </Button>
-
-                    <!-- Translate Mode: Back-Translation Trigger -->
-                    <Button
-                        Style="{StaticResource PopTranslateMicroChipButtonStyle}"
-                        Visibility="{x:Bind ViewModel.IsTranslateMode, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
-                        Command="{x:Bind ViewModel.BackTranslateCommand, Mode=OneWay}"
-                        IsEnabled="{x:Bind ViewModel.CanBackTranslate, Mode=OneWay}"
-                        AutomationProperties.Name="回译验证语义"
-                        ToolTipService.ToolTip="回译验证语义">
-                        <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
-                            <FontIcon FontSize="11" Glyph="&#xE8AB;" />
-                            <TextBlock FontSize="11" Text="回译" VerticalAlignment="Center" />
-                        </StackPanel>
-                    </Button>
-
-                    <!-- Polish Mode: Local Diff Highlight Toggle -->
-                    <ToggleButton
-                        Style="{StaticResource PopTranslateMicroChipToggleButtonStyle}"
-                        Visibility="{x:Bind ViewModel.IsPolishMode, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
-                        IsChecked="{x:Bind ViewModel.ShowDiff, Mode=TwoWay}"
-                        IsEnabled="{x:Bind ViewModel.CanToggleDiff, Mode=OneWay}"
-                        AutomationProperties.Name="对比原文修改差异"
-                        ToolTipService.ToolTip="对比原文修改差异（本地计算，不消耗 Token）">
-                        <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
-                            <FontIcon FontSize="11" Glyph="&#xE8A1;" />
-                            <TextBlock FontSize="11" Text="对比" VerticalAlignment="Center" />
-                        </StackPanel>
-                    </ToggleButton>
-
-                    <!-- TTS Speaker -->
-                    <Button
-                        Style="{StaticResource PopTranslateMicroIconButtonStyle}"
-                        Command="{x:Bind ViewModel.ToggleSpeakCommand, Mode=OneWay}"
-                        IsEnabled="{x:Bind ViewModel.HasText, Mode=OneWay}"
-                        AutomationProperties.Name="朗读结果"
-                        ToolTipService.ToolTip="{x:Bind ViewModel.SpeakTooltip, Mode=OneWay}">
-                        <FontIcon FontSize="12" Glyph="{x:Bind ViewModel.SpeakGlyph, Mode=OneWay}" />
-                    </Button>
-
-                    <Button
-                        Style="{StaticResource PopTranslateMicroIconButtonStyle}"
-                        Command="{x:Bind ViewModel.RetryCommand, Mode=OneWay}"
-                        AutomationProperties.Name="重新执行"
-                        ToolTipService.ToolTip="{x:Bind ViewModel.RetryTooltip, Mode=OneWay}">
-                        <FontIcon FontSize="12" Glyph="&#xE72C;" />
-                    </Button>
-
-                    <Button
-                        Style="{StaticResource PopTranslateMicroIconButtonStyle}"
-                        Command="{x:Bind ViewModel.CopyResultCommand, Mode=OneWay}"
-                        IsEnabled="{x:Bind ViewModel.HasText, Mode=OneWay}"
-                        AutomationProperties.Name="复制结果"
-                        ToolTipService.ToolTip="{x:Bind ViewModel.CopyTooltip, Mode=OneWay}">
-                        <FontIcon FontSize="12" Glyph="{x:Bind ViewModel.CopyGlyph, Mode=OneWay}" />
-                    </Button>
-
-                    <Button
-                        Style="{StaticResource PopTranslateMicroIconButtonStyle}"
-                        Command="{x:Bind ViewModel.ToggleCollapseCommand, Mode=OneWay}"
-                        AutomationProperties.Name="折叠或展开卡片"
-                        ToolTipService.ToolTip="折叠 / 展开">
-                        <FontIcon FontSize="11" Glyph="{x:Bind ViewModel.ChevronGlyph, Mode=OneWay}" />
-                    </Button>
-                </StackPanel>
+                    </Border>
+                </Button>
             </Grid>
+        </Border>
 
-            <!-- Collapsible Body -->
-            <StackPanel
-                Visibility="{x:Bind ViewModel.IsExpanded, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
-                Padding="12,0,12,12"
-                Spacing="8">
-                <Border
-                    Height="1"
-                    Background="{ThemeResource DividerStrokeColorDefaultBrush}"
-                    Margin="0,0,0,2" />
+        <!-- Active / Completed / Error Unified Fluent 2 Result Card -->
+        <Border
+            Visibility="{x:Bind ViewModel.ShowFullCard, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="1"
+            CornerRadius="8"
+            Padding="16,12,14,12">
+            <StackPanel Spacing="6">
+                <!-- Top Header Row (Zero Horizontal Line, Zero Name Truncation) -->
+                <Grid
+                    Background="Transparent"
+                    ColumnSpacing="8"
+                    Tapped="Header_Tapped">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
 
-                <!-- Inline Error Banner -->
-                <Border
-                    Visibility="{x:Bind ViewModel.HasError, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
-                    Background="{ThemeResource SystemFillColorCriticalBackgroundBrush}"
-                    BorderBrush="{ThemeResource SystemFillColorCriticalBrush}"
-                    BorderThickness="1"
-                    CornerRadius="6"
-                    Padding="10,8">
-                    <Grid ColumnSpacing="8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <FontIcon
-                            Grid.Column="0"
-                            FontSize="14"
-                            VerticalAlignment="Top"
-                            Margin="0,2,0,0"
-                            Foreground="{ThemeResource SystemFillColorCriticalBrush}"
-                            Glyph="&#xE783;" />
-                        <TextBlock
-                            Grid.Column="1"
-                            FontSize="12"
-                            TextWrapping="Wrap"
-                            IsTextSelectionEnabled="True"
-                            Foreground="{ThemeResource TextFillColorPrimaryBrush}"
-                            Text="{x:Bind ViewModel.ErrorMessage, Mode=OneWay}" />
-                        <Button
-                            Grid.Column="2"
-                            Content="重试"
-                            Padding="8,3"
-                            FontSize="12"
-                            VerticalAlignment="Center"
-                            AutomationProperties.Name="重试此服务"
-                            Command="{x:Bind ViewModel.RetryCommand, Mode=OneWay}" />
+                    <!-- Left: Badge + Full DisplayName (+ Polish Style Pill) + Muted Latency + Auto-Copied Pill -->
+                    <Grid Grid.Column="0" VerticalAlignment="Center">
+                        <!-- Translation Card Header Left -->
+                        <StackPanel
+                            Visibility="{x:Bind ViewModel.IsTranslateMode, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                            Orientation="Horizontal"
+                            Spacing="7"
+                            VerticalAlignment="Center">
+                            <Border
+                                MinWidth="18"
+                                Height="18"
+                                Padding="4,0"
+                                Background="{ThemeResource PopTranslateAccentSubtleBackgroundBrush}"
+                                CornerRadius="4"
+                                VerticalAlignment="Center">
+                                <TextBlock
+                                    FontSize="10"
+                                    FontWeight="SemiBold"
+                                    HorizontalAlignment="Center"
+                                    VerticalAlignment="Center"
+                                    Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                                    Text="{x:Bind ViewModel.ProviderBadgeText, Mode=OneWay}" />
+                            </Border>
+
+                            <TextBlock
+                                FontSize="12.5"
+                                FontWeight="SemiBold"
+                                MaxWidth="220"
+                                TextTrimming="CharacterEllipsis"
+                                VerticalAlignment="Center"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Text="{x:Bind ViewModel.DisplayName, Mode=OneWay}" />
+
+                            <ProgressRing
+                                Width="12"
+                                Height="12"
+                                VerticalAlignment="Center"
+                                IsActive="{x:Bind ViewModel.IsLoading, Mode=OneWay}"
+                                Visibility="{x:Bind ViewModel.IsLoading, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
+
+                            <TextBlock
+                                FontSize="11"
+                                VerticalAlignment="Center"
+                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" />
+
+                            <Border
+                                Visibility="{x:Bind ViewModel.IsAutoCopied, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                                Background="{ThemeResource PopTranslateAccentSubtleBackgroundBrush}"
+                                CornerRadius="4"
+                                Padding="5,1"
+                                VerticalAlignment="Center">
+                                <TextBlock
+                                    FontSize="10"
+                                    Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                                    Text="已自动复制" />
+                            </Border>
+                        </StackPanel>
+
+                        <!-- Polish Card Header Left -->
+                        <StackPanel
+                            Visibility="{x:Bind ViewModel.IsPolishMode, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                            Orientation="Horizontal"
+                            Spacing="6"
+                            VerticalAlignment="Center">
+                            <Border
+                                Background="{ThemeResource PopTranslatePolishSubtleBackgroundBrush}"
+                                CornerRadius="4"
+                                Padding="6,2"
+                                VerticalAlignment="Center">
+                                <TextBlock
+                                    FontSize="10.5"
+                                    FontWeight="SemiBold"
+                                    Foreground="{ThemeResource PopTranslatePolishAccentForegroundBrush}"
+                                    Text="✨ 润色" />
+                            </Border>
+
+                            <TextBlock
+                                FontSize="12.5"
+                                FontWeight="SemiBold"
+                                MaxWidth="135"
+                                TextTrimming="CharacterEllipsis"
+                                VerticalAlignment="Center"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Text="{x:Bind ViewModel.DisplayName, Mode=OneWay}" />
+
+                            <Button
+                                Height="22"
+                                Padding="7,0,6,0"
+                                Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+                                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                BorderThickness="1"
+                                CornerRadius="5"
+                                VerticalAlignment="Center"
+                                AutomationProperties.Name="选择润色风格"
+                                ToolTipService.ToolTip="切换此卡片的润色风格并重新润色">
+                                <Button.Flyout>
+                                    <MenuFlyout
+                                        x:Name="CardPolishStyleFlyout"
+                                        Placement="BottomEdgeAlignedLeft"
+                                        ShouldConstrainToRootBounds="False"
+                                        Opening="PolishStyleFlyout_Opening"
+                                        Closed="PolishStyleFlyout_Closed" />
+                                </Button.Flyout>
+                                <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                    <TextBlock
+                                        FontSize="11"
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        VerticalAlignment="Center"
+                                        Text="{x:Bind ViewModel.CardPolishStyleLabel, Mode=OneWay}" />
+                                    <FontIcon
+                                        FontSize="8"
+                                        Glyph="&#xE70D;"
+                                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                        VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Button>
+
+                            <ProgressRing
+                                Width="12"
+                                Height="12"
+                                VerticalAlignment="Center"
+                                IsActive="{x:Bind ViewModel.IsLoading, Mode=OneWay}"
+                                Visibility="{x:Bind ViewModel.IsLoading, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
+
+                            <TextBlock
+                                FontSize="11"
+                                VerticalAlignment="Center"
+                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" />
+
+                            <Border
+                                Visibility="{x:Bind ViewModel.IsAutoCopied, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                                Background="{ThemeResource PopTranslatePolishSubtleBackgroundBrush}"
+                                CornerRadius="4"
+                                Padding="5,1"
+                                VerticalAlignment="Center">
+                                <TextBlock
+                                    FontSize="10"
+                                    Foreground="{ThemeResource PopTranslatePolishAccentForegroundBrush}"
+                                    Text="已自动复制" />
+                            </Border>
+                        </StackPanel>
                     </Grid>
-                </Border>
 
-                <!-- Streaming / Reasoning Placeholder -->
-                <TextBlock
-                    Visibility="{x:Bind ViewModel.ShowStreamingPlaceholder, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
-                    FontSize="13"
-                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                    Text="{x:Bind ViewModel.StreamingPlaceholderText, Mode=OneWay}" />
+                    <!-- Right: Compact Controls ONLY (对比 on Polish + 🔊 + 📋) -->
+                    <StackPanel
+                        Grid.Column="1"
+                        Orientation="Horizontal"
+                        Spacing="2"
+                        VerticalAlignment="Center">
+                        <!-- Polish Local Diff Subtle Tinted Ghost Toggle Button (NO Solid ToggleButton!) -->
+                        <Button
+                            Visibility="{x:Bind ViewModel.IsPolishMode, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                            Height="26"
+                            Padding="0"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            CornerRadius="5"
+                            Command="{x:Bind ViewModel.ToggleShowDiffCommand, Mode=OneWay}"
+                            IsEnabled="{x:Bind ViewModel.CanToggleDiff, Mode=OneWay}"
+                            AutomationProperties.Name="对比原文修改差异"
+                            ToolTipService.ToolTip="对比原文修改差异（本地计算，零 Token 消耗）">
+                            <Grid Height="26">
+                                <Border
+                                    Visibility="{x:Bind ViewModel.ShowDiff, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                                    Background="{ThemeResource PopTranslateAccentSubtleBackgroundBrush}"
+                                    BorderBrush="{ThemeResource PopTranslateAccentSubtleBorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="5"
+                                    Padding="7,0">
+                                    <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                        <FontIcon
+                                            FontSize="11"
+                                            Glyph="&#xE8A1;"
+                                            Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                                        <TextBlock
+                                            FontSize="11.5"
+                                            FontWeight="SemiBold"
+                                            VerticalAlignment="Center"
+                                            Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                                            Text="对比" />
+                                    </StackPanel>
+                                </Border>
 
-                <!-- Plain Result Text (Live Streaming or Plain Prose) -->
-                <TextBlock
-                    Visibility="{x:Bind ViewModel.ShowPlainText, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
-                    FontSize="14"
-                    LineHeight="22"
-                    TextWrapping="Wrap"
-                    IsTextSelectionEnabled="True"
-                    Foreground="{ThemeResource TextFillColorPrimaryBrush}"
-                    Text="{x:Bind ViewModel.TranslatedText, Mode=OneWay}" />
+                                <Border
+                                    Visibility="{x:Bind ViewModel.IsDiffOff, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                                    Background="Transparent"
+                                    CornerRadius="5"
+                                    Padding="7,0">
+                                    <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                        <FontIcon
+                                            FontSize="11"
+                                            Glyph="&#xE8A1;"
+                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                        <TextBlock
+                                            FontSize="11.5"
+                                            VerticalAlignment="Center"
+                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                            Text="对比" />
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
+                        </Button>
 
-                <!-- Native Formatted Result Text (Inline `code`, fenced ```code```, and **bold**) -->
-                <RichTextBlock
-                    x:Name="FormattedRichTextBlock"
-                    Visibility="{x:Bind ViewModel.ShowFormattedMarkdown, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
-                    FontSize="14"
-                    LineHeight="22"
-                    TextWrapping="Wrap"
-                    IsTextSelectionEnabled="True"
-                    Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                        <!-- TTS Speaker (28x28 Ghost) -->
+                        <Button
+                            Style="{StaticResource PopTranslateMicroIconButtonStyle}"
+                            Command="{x:Bind ViewModel.ToggleSpeakCommand, Mode=OneWay}"
+                            IsEnabled="{x:Bind ViewModel.HasText, Mode=OneWay}"
+                            AutomationProperties.Name="朗读结果"
+                            ToolTipService.ToolTip="{x:Bind ViewModel.SpeakTooltip, Mode=OneWay}">
+                            <FontIcon
+                                FontSize="12.5"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Glyph="{x:Bind ViewModel.SpeakGlyph, Mode=OneWay}" />
+                        </Button>
 
-                <!-- Polish Local Diff View (RichTextBlock + TextHighlighter, rendered once Completed) -->
-                <RichTextBlock
-                    x:Name="DiffRichTextBlock"
-                    Visibility="{x:Bind ViewModel.ShowDiffText, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
-                    FontSize="14"
-                    LineHeight="22"
-                    TextWrapping="Wrap"
-                    IsTextSelectionEnabled="True"
-                    Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                        <!-- Copy Result (28x28 Ghost) -->
+                        <Button
+                            Style="{StaticResource PopTranslateMicroIconButtonStyle}"
+                            Command="{x:Bind ViewModel.CopyResultCommand, Mode=OneWay}"
+                            IsEnabled="{x:Bind ViewModel.HasText, Mode=OneWay}"
+                            AutomationProperties.Name="复制结果"
+                            ToolTipService.ToolTip="{x:Bind ViewModel.CopyTooltip, Mode=OneWay}">
+                            <FontIcon
+                                FontSize="12.5"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Glyph="{x:Bind ViewModel.CopyGlyph, Mode=OneWay}" />
+                        </Button>
+                    </StackPanel>
+                </Grid>
 
-                <!-- Back-Translation Sub-Panel (Translate Mode Only) -->
-                <Border
-                    Visibility="{x:Bind ViewModel.IsBackTranslateVisible, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
-                    Background="{ThemeResource SubtleFillColorSecondaryBrush}"
-                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                    BorderThickness="1"
-                    CornerRadius="6"
-                    Padding="10,8"
-                    Margin="0,2,0,0">
-                    <StackPanel Spacing="6">
-                        <Grid ColumnSpacing="6">
+                <!-- Collapsible Body (6px clean spacing below header, no horizontal divider line) -->
+                <StackPanel
+                    Visibility="{x:Bind ViewModel.IsExpanded, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                    Spacing="6">
+
+                    <!-- Inline Error Banner -->
+                    <Border
+                        Visibility="{x:Bind ViewModel.HasError, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                        Background="{ThemeResource SystemFillColorCriticalBackgroundBrush}"
+                        BorderBrush="{ThemeResource SystemFillColorCriticalBrush}"
+                        BorderThickness="1"
+                        CornerRadius="6"
+                        Padding="10,8">
+                        <Grid ColumnSpacing="8">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
-
-                            <Border
+                            <FontIcon
                                 Grid.Column="0"
-                                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                                BorderThickness="1"
-                                CornerRadius="4"
-                                Padding="6,2"
-                                VerticalAlignment="Center">
-                                <TextBlock
-                                    FontSize="11"
-                                    FontWeight="SemiBold"
-                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                    Text="{x:Bind ViewModel.BackTranslateTargetLabel, Mode=OneWay}" />
-                            </Border>
-
-                            <StackPanel
+                                FontSize="14"
+                                VerticalAlignment="Top"
+                                Margin="0,2,0,0"
+                                Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                                Glyph="&#xE783;" />
+                            <TextBlock
                                 Grid.Column="1"
-                                Orientation="Horizontal"
-                                Spacing="5"
-                                HorizontalAlignment="Right"
-                                VerticalAlignment="Center">
-                                <ProgressRing
-                                    Width="12"
-                                    Height="12"
-                                    IsActive="{x:Bind ViewModel.IsBackTranslating, Mode=OneWay}"
-                                    Visibility="{x:Bind ViewModel.IsBackTranslating, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
-                                <TextBlock
-                                    FontSize="11"
-                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                                    VerticalAlignment="Center"
-                                    Text="{x:Bind ViewModel.BackTranslateStatusText, Mode=OneWay}" />
-                            </StackPanel>
-
-                            <StackPanel
+                                FontSize="12"
+                                TextWrapping="Wrap"
+                                IsTextSelectionEnabled="True"
+                                Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                                Text="{x:Bind ViewModel.ErrorMessage, Mode=OneWay}" />
+                            <Button
                                 Grid.Column="2"
-                                Orientation="Horizontal"
-                                Spacing="2"
-                                VerticalAlignment="Center">
-                                <Button
-                                    Style="{StaticResource PopTranslateMicroIconButtonStyle}"
-                                    Width="24"
-                                    Height="24"
-                                    Command="{x:Bind ViewModel.BackTranslateCommand, Mode=OneWay}"
-                                    AutomationProperties.Name="重新回译"
-                                    ToolTipService.ToolTip="重新回译">
+                                Padding="8,3"
+                                FontSize="12"
+                                VerticalAlignment="Center"
+                                AutomationProperties.Name="重试此服务"
+                                Command="{x:Bind ViewModel.RetryCommand, Mode=OneWay}">
+                                <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
                                     <FontIcon FontSize="11" Glyph="&#xE72C;" />
-                                </Button>
-                                <Button
-                                    Style="{StaticResource PopTranslateMicroIconButtonStyle}"
-                                    Width="24"
-                                    Height="24"
-                                    Command="{x:Bind ViewModel.CopyBackTranslationCommand, Mode=OneWay}"
-                                    IsEnabled="{x:Bind ViewModel.HasBackTranslatedText, Mode=OneWay}"
-                                    AutomationProperties.Name="复制回译结果"
-                                    ToolTipService.ToolTip="{x:Bind ViewModel.BackTranslateCopyTooltip, Mode=OneWay}">
-                                    <FontIcon FontSize="11" Glyph="{x:Bind ViewModel.BackTranslateCopyGlyph, Mode=OneWay}" />
-                                </Button>
-                                <Button
-                                    Style="{StaticResource PopTranslateMicroIconButtonStyle}"
-                                    Width="24"
-                                    Height="24"
-                                    Command="{x:Bind ViewModel.DismissBackTranslationCommand, Mode=OneWay}"
-                                    AutomationProperties.Name="收起回译"
-                                    ToolTipService.ToolTip="收起回译">
-                                    <FontIcon FontSize="10" Glyph="&#xE711;" />
-                                </Button>
-                            </StackPanel>
+                                    <TextBlock FontSize="12" Text="重试" />
+                                </StackPanel>
+                            </Button>
                         </Grid>
+                    </Border>
 
-                        <!-- Back-Translation Inline Error -->
-                        <Border
-                            Visibility="{x:Bind ViewModel.HasBackTranslateError, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
-                            Background="{ThemeResource SystemFillColorCriticalBackgroundBrush}"
-                            BorderBrush="{ThemeResource SystemFillColorCriticalBrush}"
-                            BorderThickness="1"
-                            CornerRadius="5"
-                            Padding="8,6">
-                            <Grid ColumnSpacing="8">
+                    <!-- Streaming / Reasoning Placeholder -->
+                    <TextBlock
+                        Visibility="{x:Bind ViewModel.ShowStreamingPlaceholder, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                        FontSize="13.5"
+                        LineHeight="22"
+                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                        Text="{x:Bind ViewModel.StreamingPlaceholderText, Mode=OneWay}" />
+
+                    <!-- Plain Result Text (Live Streaming or Plain Prose) -->
+                    <TextBlock
+                        Visibility="{x:Bind ViewModel.ShowPlainText, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                        FontSize="14"
+                        LineHeight="23"
+                        TextWrapping="Wrap"
+                        IsTextSelectionEnabled="True"
+                        Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                        Text="{x:Bind ViewModel.TranslatedText, Mode=OneWay}" />
+
+                    <!-- Native Formatted Result Text (Inline `code`, fenced ```code```, and **bold**) -->
+                    <RichTextBlock
+                        x:Name="FormattedRichTextBlock"
+                        Visibility="{x:Bind ViewModel.ShowFormattedMarkdown, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                        FontSize="14"
+                        LineHeight="23"
+                        TextWrapping="Wrap"
+                        IsTextSelectionEnabled="True"
+                        Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+
+                    <!-- Polish Local Diff View (RichTextBlock + TextHighlighter, rendered once Completed) -->
+                    <RichTextBlock
+                        x:Name="DiffRichTextBlock"
+                        Visibility="{x:Bind ViewModel.ShowDiffText, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                        FontSize="14"
+                        LineHeight="23"
+                        TextWrapping="Wrap"
+                        IsTextSelectionEnabled="True"
+                        Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+
+                    <!-- Back-Translation Sub-Panel (Translate Mode Only) -->
+                    <Border
+                        Visibility="{x:Bind ViewModel.IsBackTranslateVisible, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                        Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="6"
+                        Padding="10,8"
+                        Margin="0,2,0,0">
+                        <StackPanel Spacing="6">
+                            <Grid ColumnSpacing="6">
                                 <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
-                                <TextBlock
+
+                                <Border
                                     Grid.Column="0"
-                                    FontSize="12"
-                                    TextWrapping="Wrap"
-                                    IsTextSelectionEnabled="True"
-                                    Foreground="{ThemeResource TextFillColorPrimaryBrush}"
-                                    Text="{x:Bind ViewModel.BackTranslateErrorMessage, Mode=OneWay}" />
-                                <Button
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="4"
+                                    Padding="6,2"
+                                    VerticalAlignment="Center">
+                                    <TextBlock
+                                        FontSize="11"
+                                        FontWeight="SemiBold"
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Text="{x:Bind ViewModel.BackTranslateTargetLabel, Mode=OneWay}" />
+                                </Border>
+
+                                <StackPanel
                                     Grid.Column="1"
-                                    Content="重试"
-                                    Padding="7,2"
-                                    FontSize="11"
-                                    VerticalAlignment="Center"
-                                    AutomationProperties.Name="重试回译"
-                                    Command="{x:Bind ViewModel.BackTranslateCommand, Mode=OneWay}" />
+                                    Orientation="Horizontal"
+                                    Spacing="5"
+                                    HorizontalAlignment="Right"
+                                    VerticalAlignment="Center">
+                                    <ProgressRing
+                                        Width="12"
+                                        Height="12"
+                                        IsActive="{x:Bind ViewModel.IsBackTranslating, Mode=OneWay}"
+                                        Visibility="{x:Bind ViewModel.IsBackTranslating, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                    <TextBlock
+                                        FontSize="11"
+                                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                        VerticalAlignment="Center"
+                                        Text="{x:Bind ViewModel.BackTranslateStatusText, Mode=OneWay}" />
+                                </StackPanel>
+
+                                <StackPanel
+                                    Grid.Column="2"
+                                    Orientation="Horizontal"
+                                    Spacing="2"
+                                    VerticalAlignment="Center">
+                                    <Button
+                                        Style="{StaticResource PopTranslateMicroIconButtonStyle}"
+                                        Width="24"
+                                        Height="24"
+                                        Command="{x:Bind ViewModel.BackTranslateCommand, Mode=OneWay}"
+                                        AutomationProperties.Name="重新回译"
+                                        ToolTipService.ToolTip="重新回译">
+                                        <FontIcon FontSize="11" Glyph="&#xE72C;" />
+                                    </Button>
+                                    <Button
+                                        Style="{StaticResource PopTranslateMicroIconButtonStyle}"
+                                        Width="24"
+                                        Height="24"
+                                        Command="{x:Bind ViewModel.CopyBackTranslationCommand, Mode=OneWay}"
+                                        IsEnabled="{x:Bind ViewModel.HasBackTranslatedText, Mode=OneWay}"
+                                        AutomationProperties.Name="复制回译结果"
+                                        ToolTipService.ToolTip="{x:Bind ViewModel.BackTranslateCopyTooltip, Mode=OneWay}">
+                                        <FontIcon FontSize="11" Glyph="{x:Bind ViewModel.BackTranslateCopyGlyph, Mode=OneWay}" />
+                                    </Button>
+                                    <Button
+                                        Style="{StaticResource PopTranslateMicroIconButtonStyle}"
+                                        Width="24"
+                                        Height="24"
+                                        Command="{x:Bind ViewModel.DismissBackTranslationCommand, Mode=OneWay}"
+                                        AutomationProperties.Name="收起回译"
+                                        ToolTipService.ToolTip="收起回译">
+                                        <FontIcon FontSize="10" Glyph="&#xE711;" />
+                                    </Button>
+                                </StackPanel>
                             </Grid>
-                        </Border>
 
-                        <!-- Back-Translation Streaming Placeholder -->
-                        <TextBlock
-                            Visibility="{x:Bind ViewModel.ShowBackTranslatePlaceholder, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
-                            FontSize="12"
-                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                            Text="正在回译..." />
+                            <!-- Back-Translation Inline Error -->
+                            <Border
+                                Visibility="{x:Bind ViewModel.HasBackTranslateError, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                                Background="{ThemeResource SystemFillColorCriticalBackgroundBrush}"
+                                BorderBrush="{ThemeResource SystemFillColorCriticalBrush}"
+                                BorderThickness="1"
+                                CornerRadius="5"
+                                Padding="8,6">
+                                <Grid ColumnSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock
+                                        Grid.Column="0"
+                                        FontSize="12"
+                                        TextWrapping="Wrap"
+                                        IsTextSelectionEnabled="True"
+                                        Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                                        Text="{x:Bind ViewModel.BackTranslateErrorMessage, Mode=OneWay}" />
+                                    <Button
+                                        Grid.Column="1"
+                                        Content="重试"
+                                        Padding="7,2"
+                                        FontSize="11"
+                                        VerticalAlignment="Center"
+                                        AutomationProperties.Name="重试回译"
+                                        Command="{x:Bind ViewModel.BackTranslateCommand, Mode=OneWay}" />
+                                </Grid>
+                            </Border>
 
-                        <!-- Back-Translated Text -->
-                        <TextBlock
-                            Visibility="{x:Bind ViewModel.HasBackTranslatedText, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
-                            FontSize="13"
-                            LineHeight="20"
-                            TextWrapping="Wrap"
-                            IsTextSelectionEnabled="True"
-                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                            Text="{x:Bind ViewModel.BackTranslatedText, Mode=OneWay}" />
+                            <!-- Back-Translation Streaming Placeholder -->
+                            <TextBlock
+                                Visibility="{x:Bind ViewModel.ShowBackTranslatePlaceholder, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                                FontSize="12"
+                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                Text="正在回译..." />
+
+                            <!-- Back-Translated Text -->
+                            <TextBlock
+                                Visibility="{x:Bind ViewModel.HasBackTranslatedText, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                                FontSize="13"
+                                LineHeight="20"
+                                TextWrapping="Wrap"
+                                IsTextSelectionEnabled="True"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Text="{x:Bind ViewModel.BackTranslatedText, Mode=OneWay}" />
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Quiet Bottom Contextual Action Row (Visible When HasText & Not IsWaitingOnDemand) -->
+                    <StackPanel
+                        Visibility="{x:Bind ViewModel.ShowContextualActionRow, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                        Orientation="Horizontal"
+                        Spacing="14"
+                        Margin="0,8,0,0">
+
+                        <!-- Write-Back on Translation Card (Quiet Link) -->
+                        <Button
+                            Style="{StaticResource PopTranslateContextualLinkButtonStyle}"
+                            Visibility="{x:Bind ViewModel.ShowTranslateWriteBackButton, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                            Command="{x:Bind ViewModel.WriteBackCommand, Mode=OneWay}"
+                            IsEnabled="{x:Bind ViewModel.CanWriteBack, Mode=OneWay}"
+                            AutomationProperties.Name="回填替换原文"
+                            ToolTipService.ToolTip="{x:Bind ViewModel.WriteBackTooltip, Mode=OneWay}">
+                            <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                <FontIcon
+                                    FontSize="11"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Glyph="{x:Bind ViewModel.WriteBackGlyph, Mode=OneWay}" />
+                                <TextBlock
+                                    FontSize="12"
+                                    VerticalAlignment="Center"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Text="{x:Bind ViewModel.WriteBackLabel, Mode=OneWay}" />
+                            </StackPanel>
+                        </Button>
+
+                        <!-- Write-Back on Polish Card (Gently Highlighted in Polish Accent!) -->
+                        <Button
+                            Style="{StaticResource PopTranslateContextualLinkButtonStyle}"
+                            Padding="0"
+                            Visibility="{x:Bind ViewModel.ShowPolishWriteBackButton, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                            Command="{x:Bind ViewModel.WriteBackCommand, Mode=OneWay}"
+                            IsEnabled="{x:Bind ViewModel.CanWriteBack, Mode=OneWay}"
+                            AutomationProperties.Name="回填替换原文"
+                            ToolTipService.ToolTip="{x:Bind ViewModel.WriteBackTooltip, Mode=OneWay}">
+                            <Border
+                                Background="{ThemeResource PopTranslatePolishSubtleBackgroundBrush}"
+                                CornerRadius="5"
+                                Padding="7,2">
+                                <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                    <FontIcon
+                                        FontSize="11"
+                                        Foreground="{ThemeResource PopTranslatePolishAccentForegroundBrush}"
+                                        Glyph="{x:Bind ViewModel.WriteBackGlyph, Mode=OneWay}" />
+                                    <TextBlock
+                                        FontSize="12"
+                                        FontWeight="SemiBold"
+                                        VerticalAlignment="Center"
+                                        Foreground="{ThemeResource PopTranslatePolishAccentForegroundBrush}"
+                                        Text="{x:Bind ViewModel.WriteBackLabel, Mode=OneWay}" />
+                                </StackPanel>
+                            </Border>
+                        </Button>
+
+                        <!-- Back-Translate Verification (Translation Cards) -->
+                        <Button
+                            Style="{StaticResource PopTranslateContextualLinkButtonStyle}"
+                            Visibility="{x:Bind ViewModel.IsTranslateMode, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                            Command="{x:Bind ViewModel.BackTranslateCommand, Mode=OneWay}"
+                            IsEnabled="{x:Bind ViewModel.CanBackTranslate, Mode=OneWay}"
+                            AutomationProperties.Name="回译核对"
+                            ToolTipService.ToolTip="反向回译以核对译文准确度">
+                            <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                <FontIcon
+                                    FontSize="11"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Glyph="&#xE8AB;" />
+                                <TextBlock
+                                    FontSize="12"
+                                    VerticalAlignment="Center"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Text="回译核对" />
+                            </StackPanel>
+                        </Button>
+
+                        <!-- Retry Link -->
+                        <Button
+                            Style="{StaticResource PopTranslateContextualLinkButtonStyle}"
+                            Command="{x:Bind ViewModel.RetryCommand, Mode=OneWay}"
+                            AutomationProperties.Name="重试"
+                            ToolTipService.ToolTip="{x:Bind ViewModel.RetryTooltip, Mode=OneWay}">
+                            <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                <FontIcon
+                                    FontSize="11"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Glyph="&#xE72C;" />
+                                <TextBlock
+                                    FontSize="12"
+                                    VerticalAlignment="Center"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Text="重试" />
+                            </StackPanel>
+                        </Button>
                     </StackPanel>
-                </Border>
+                </StackPanel>
             </StackPanel>
-        </StackPanel>
-    </Border>
+        </Border>
+    </Grid>
 </UserControl>

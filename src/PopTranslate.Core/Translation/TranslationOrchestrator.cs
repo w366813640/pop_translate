@@ -271,7 +271,7 @@ public sealed class TranslationOrchestrator : ITranslationOrchestrator
         else
         {
             selected = providersList
-                .Where(p => p is not null && p.Enabled)
+                .Where(p => p is not null && p.Enabled && p.Role == ProviderRole.Translate)
                 .OrderBy(p => p.SortOrder)
                 .Select(p => p.Clone())
                 .ToList();

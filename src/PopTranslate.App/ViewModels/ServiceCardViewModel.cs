@@ -9,11 +9,24 @@ namespace PopTranslate.App.ViewModels;
 
 public sealed partial class ServiceCardViewModel : ObservableObject
 {
+    public static IReadOnlyList<(PolishStyle Style, string DisplayLabel)> PolishStylePresets { get; } =
+    [
+        (PolishStyle.General, "通用自然"),
+        (PolishStyle.Academic, "学术严谨"),
+        (PolishStyle.Business, "商务得体"),
+        (PolishStyle.Casual, "口语地道"),
+        (PolishStyle.Concise, "精简凝练"),
+        (PolishStyle.CodeNaming, "代码命名"),
+        (PolishStyle.Custom, "自定义 Prompt"),
+    ];
+
     private readonly Func<string, Task> _retryCallback;
     private readonly Func<string, Task>? _backTranslateCallback;
     private readonly Action<string>? _cancelBackTranslateCallback;
     private readonly Func<string, Task>? _writeBackCallback;
     private readonly Func<string, Task>? _toggleSpeakCallback;
+    private readonly Action? _flyoutOpenedCallback;
+    private readonly Action? _flyoutClosedCallback;
     private readonly ITextDiffService? _textDiffService;
     private readonly Action _layoutChangedCallback;
     private readonly DispatcherQueue? _dispatcher;
@@ -36,7 +49,12 @@ public sealed partial class ServiceCardViewModel : ObservableObject
         DispatcherQueue? dispatcher = null,
         Func<string, Task>? writeBackCallback = null,
         Func<string, Task>? toggleSpeakCallback = null,
-        bool hasSourceWindow = false)
+        bool hasSourceWindow = false,
+        string? cardId = null,
+        PolishStyle initialPolishStyle = PolishStyle.General,
+        bool isWaitingOnDemand = false,
+        Action? flyoutOpenedCallback = null,
+        Action? flyoutClosedCallback = null)
     {
         ArgumentNullException.ThrowIfNull(config);
         _retryCallback = retryCallback;
@@ -47,20 +65,36 @@ public sealed partial class ServiceCardViewModel : ObservableObject
         _dispatcher = dispatcher;
         _writeBackCallback = writeBackCallback;
         _toggleSpeakCallback = toggleSpeakCallback;
+        _flyoutOpenedCallback = flyoutOpenedCallback;
+        _flyoutClosedCallback = flyoutClosedCallback;
 
+        CardId = string.IsNullOrWhiteSpace(cardId) ? config.Id : cardId;
         ProviderInstanceId = config.Id;
         DisplayName = string.IsNullOrWhiteSpace(config.DisplayName) ? config.Kind.ToString() : config.DisplayName;
         ProviderKind = config.Kind;
         Mode = mode;
         SourceText = sourceText ?? string.Empty;
         IsCollapsed = config.IsCollapsedByDefault;
+        CardPolishStyle = initialPolishStyle;
         ShowDiff = mode == PopupMode.Polish && showDiffByDefault;
         HasSourceWindow = hasSourceWindow;
-        State = ProviderStreamState.Pending;
-        StatusText = "准备中...";
+        IsWaitingOnDemand = mode == PopupMode.Polish && isWaitingOnDemand;
+
+        if (IsWaitingOnDemand)
+        {
+            State = ProviderStreamState.Cancelled;
+            StatusText = string.Empty;
+        }
+        else
+        {
+            State = ProviderStreamState.Pending;
+            StatusText = "准备中...";
+        }
     }
 
     public event EventHandler? DiffSegmentsChanged;
+
+    public string CardId { get; }
 
     public string ProviderInstanceId { get; }
 
@@ -82,17 +116,22 @@ public sealed partial class ServiceCardViewModel : ObservableObject
 
     public string ProviderBadgeText => ProviderKind switch
     {
-        ProviderKind.OpenAiCompatible => "LLM",
-        ProviderKind.DeepL => "DeepL",
-        _ => "免费",
+        ProviderKind.OpenAiCompatible => "AI",
+        ProviderKind.DeepL => "DL",
+        _ => "译",
     };
 
-    public string ProviderGlyph => ProviderKind switch
-    {
-        ProviderKind.OpenAiCompatible => "\uE945",
-        ProviderKind.DeepL => "\uE8C1",
-        _ => "\uE774",
-    };
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CardPolishStyleLabel))]
+    [NotifyPropertyChangedFor(nameof(OnDemandSummaryText))]
+    public partial PolishStyle CardPolishStyle { get; set; }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowFullCard))]
+    [NotifyPropertyChangedFor(nameof(IsLoading))]
+    [NotifyPropertyChangedFor(nameof(ShowStreamingPlaceholder))]
+    [NotifyPropertyChangedFor(nameof(ShowContextualActionRow))]
+    public partial bool IsWaitingOnDemand { get; set; }
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasText))]
@@ -104,6 +143,7 @@ public sealed partial class ServiceCardViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(ShowPlainText))]
     [NotifyPropertyChangedFor(nameof(ShowFormattedMarkdown))]
     [NotifyPropertyChangedFor(nameof(ShowDiffText))]
+    [NotifyPropertyChangedFor(nameof(ShowContextualActionRow))]
     public partial string TranslatedText { get; set; } = string.Empty;
 
     [ObservableProperty]
@@ -135,11 +175,14 @@ public sealed partial class ServiceCardViewModel : ObservableObject
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ShowWriteBackButton))]
+    [NotifyPropertyChangedFor(nameof(ShowTranslateWriteBackButton))]
+    [NotifyPropertyChangedFor(nameof(ShowPolishWriteBackButton))]
     [NotifyPropertyChangedFor(nameof(CanWriteBack))]
     public partial bool HasSourceWindow { get; set; }
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(WriteBackGlyph))]
+    [NotifyPropertyChangedFor(nameof(WriteBackLabel))]
     [NotifyPropertyChangedFor(nameof(WriteBackTooltip))]
     public partial bool JustWroteBack { get; set; }
 
@@ -160,6 +203,7 @@ public sealed partial class ServiceCardViewModel : ObservableObject
 
     // Polish local diff state
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsDiffOff))]
     [NotifyPropertyChangedFor(nameof(ShowPlainText))]
     [NotifyPropertyChangedFor(nameof(ShowFormattedMarkdown))]
     [NotifyPropertyChangedFor(nameof(ShowDiffText))]
@@ -198,15 +242,25 @@ public sealed partial class ServiceCardViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(BackTranslateCopyTooltip))]
     public partial bool BackTranslateJustCopied { get; set; }
 
+    public bool ShowFullCard => !IsWaitingOnDemand;
+
     public bool IsExpanded => !IsCollapsed;
 
-    public bool IsLoading => State is ProviderStreamState.Pending or ProviderStreamState.Streaming;
+    public bool IsDiffOff => !ShowDiff;
 
-    public bool IsStreaming => State == ProviderStreamState.Streaming;
+    public string CardPolishStyleLabel => FormatPolishStyleLabel(CardPolishStyle);
+
+    public string OnDemandSummaryText => $"{DisplayName} · {CardPolishStyleLabel}";
+
+    public bool IsLoading => !IsWaitingOnDemand && State is ProviderStreamState.Pending or ProviderStreamState.Streaming;
+
+    public bool IsStreaming => !IsWaitingOnDemand && State == ProviderStreamState.Streaming;
 
     public bool HasError => !string.IsNullOrWhiteSpace(ErrorMessage);
 
     public bool HasText => !string.IsNullOrEmpty(TranslatedText);
+
+    public bool ShowContextualActionRow => HasText && !IsWaitingOnDemand;
 
     public bool HasMarkdownSyntax => !IsLoading && ContainsInlineMarkdown(TranslatedText);
 
@@ -217,6 +271,10 @@ public sealed partial class ServiceCardViewModel : ObservableObject
     public bool CanToggleDiff => IsPolishMode && HasText;
 
     public bool ShowWriteBackButton => HasSourceWindow;
+
+    public bool ShowTranslateWriteBackButton => HasSourceWindow && IsTranslateMode;
+
+    public bool ShowPolishWriteBackButton => HasSourceWindow && IsPolishMode;
 
     public bool CanWriteBack => HasSourceWindow && HasText && !IsLoading;
 
@@ -240,7 +298,7 @@ public sealed partial class ServiceCardViewModel : ObservableObject
 
     public string StreamingPlaceholderText => IsReasoning
         ? "思考中..."
-        : (IsPolishMode ? "正在等待润色结果返回..." : "正在等待译文返回...");
+        : (IsPolishMode ? "正在润色文本..." : "正在等待译文返回...");
 
     public string ChevronGlyph => IsCollapsed ? "\uE70D" : "\uE70E";
 
@@ -248,7 +306,9 @@ public sealed partial class ServiceCardViewModel : ObservableObject
 
     public string CopyTooltip => JustCopied ? "已复制" : (IsPolishMode ? "复制润色结果" : "复制译文");
 
-    public string WriteBackGlyph => JustWroteBack ? "\uE73E" : "\uE751";
+    public string WriteBackGlyph => JustWroteBack ? "\uE73E" : "\uE7A7";
+
+    public string WriteBackLabel => JustWroteBack ? "已回填替换" : "回填替换原文";
 
     public string WriteBackTooltip => JustWroteBack
         ? "已回填替换"
@@ -266,8 +326,41 @@ public sealed partial class ServiceCardViewModel : ObservableObject
 
     public string BackTranslateCopyTooltip => BackTranslateJustCopied ? "已复制回译" : "复制回译";
 
+    public static string FormatPolishStyleLabel(PolishStyle style) => style switch
+    {
+        PolishStyle.General => "通用自然",
+        PolishStyle.Academic => "学术严谨",
+        PolishStyle.Business => "商务得体",
+        PolishStyle.Casual => "口语地道",
+        PolishStyle.Concise => "精简凝练",
+        PolishStyle.CodeNaming => "代码命名",
+        PolishStyle.Custom => "自定义 Prompt",
+        _ => "通用自然",
+    };
+
+    public void NotifyFlyoutOpened() => _flyoutOpenedCallback?.Invoke();
+
+    public void NotifyFlyoutClosed() => _flyoutClosedCallback?.Invoke();
+
+    public async Task SelectPolishStyleAsync(PolishStyle nextStyle)
+    {
+        if (!IsPolishMode)
+        {
+            return;
+        }
+
+        var styleChanged = CardPolishStyle != nextStyle;
+        CardPolishStyle = nextStyle;
+
+        if (styleChanged || IsWaitingOnDemand || !IsLoading)
+        {
+            await _retryCallback(CardId);
+        }
+    }
+
     public void ResetForRetry()
     {
+        IsWaitingOnDemand = false;
         TranslatedText = string.Empty;
         ErrorMessage = null;
         IsReasoning = false;
@@ -285,6 +378,7 @@ public sealed partial class ServiceCardViewModel : ObservableObject
 
     public void ApplyUpdate(ProviderStreamUpdate update)
     {
+        IsWaitingOnDemand = false;
         IsReasoning = update.State == ProviderStreamState.Streaming && update.IsReasoning;
         State = update.State;
 
@@ -316,7 +410,7 @@ public sealed partial class ServiceCardViewModel : ObservableObject
 
             case ProviderStreamState.Streaming:
                 ErrorMessage = null;
-                StatusText = update.IsReasoning ? "思考中..." : "流式生成中...";
+                StatusText = update.IsReasoning ? "思考中..." : "生成中...";
                 break;
 
             case ProviderStreamState.Completed:
@@ -457,8 +551,31 @@ public sealed partial class ServiceCardViewModel : ObservableObject
     [RelayCommand]
     private void ToggleCollapse()
     {
+        if (IsWaitingOnDemand)
+        {
+            return;
+        }
+
         IsCollapsed = !IsCollapsed;
         _layoutChangedCallback();
+    }
+
+    [RelayCommand]
+    private void ToggleShowDiff()
+    {
+        if (CanToggleDiff)
+        {
+            ShowDiff = !ShowDiff;
+        }
+    }
+
+    [RelayCommand]
+    private async Task RunOnDemandPolishAsync()
+    {
+        if (IsPolishMode)
+        {
+            await _retryCallback(CardId);
+        }
     }
 
     [RelayCommand]
@@ -483,7 +600,7 @@ public sealed partial class ServiceCardViewModel : ObservableObject
     {
         if (_writeBackCallback is not null && CanWriteBack)
         {
-            await _writeBackCallback(ProviderInstanceId);
+            await _writeBackCallback(CardId);
         }
     }
 
@@ -492,14 +609,14 @@ public sealed partial class ServiceCardViewModel : ObservableObject
     {
         if (_toggleSpeakCallback is not null && HasText)
         {
-            await _toggleSpeakCallback(ProviderInstanceId);
+            await _toggleSpeakCallback(CardId);
         }
     }
 
     [RelayCommand]
     private async Task RetryAsync()
     {
-        await _retryCallback(ProviderInstanceId);
+        await _retryCallback(CardId);
     }
 
     [RelayCommand]
@@ -507,7 +624,7 @@ public sealed partial class ServiceCardViewModel : ObservableObject
     {
         if (_backTranslateCallback is not null && CanBackTranslate)
         {
-            await _backTranslateCallback(ProviderInstanceId);
+            await _backTranslateCallback(CardId);
         }
     }
 
@@ -531,7 +648,7 @@ public sealed partial class ServiceCardViewModel : ObservableObject
     [RelayCommand]
     private void DismissBackTranslation()
     {
-        _cancelBackTranslateCallback?.Invoke(ProviderInstanceId);
+        _cancelBackTranslateCallback?.Invoke(CardId);
         ResetBackTranslation();
     }
 

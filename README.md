@@ -13,16 +13,16 @@
 
 ## 核心特性
 
-- **极速无侵入划词与 `译 | 润` 双动作悬浮胶囊**
+- **极速无侵入划词与 `译` 悬浮图标**
   - 优先通过 Windows UI Automation (`IUIAutomation`) 零侵入读取选中文本，按需回退至防历史/云端污染的剪贴板快照恢复机制。
-  - 鼠标划词弹出无焦点抢占悬浮胶囊，悬停自动展开 `译 | 润` 双动作按钮，右键支持一键屏蔽当前应用或暂停划词 30 分钟；同时支持全局快捷键、可选按住 `Ctrl` 划词、全屏免打扰与双击 `Ctrl+C+C` 触发翻译。
+  - 鼠标划词弹出无焦点抢占 `译` 悬浮图标，点击即开统一单页弹窗，右键支持一键屏蔽当前应用或暂停划词 30 分钟；同时支持全局快捷键、可选按住 `Ctrl` 划词、全屏免打扰与双击 `Ctrl+C+C` 触发翻译。
 - **多引擎并行流式翻译、词典分流与代码拆词**
   - 内置零配置免费翻译（Google 多节点 + Bing 自动故障转移）、DeepL（自动识别 Free / Pro 及配额检测）与任意 OpenAI 兼容大模型（SSE 实时流式输出，自动剥离推理模型 `<think>` 思维链）。
   - 内置主流服务商一键预设（OpenAI、DeepSeek、Gemini、SiliconFlow、Ollama 本地免密钥、OpenRouter、通义千问、智谱 GLM）及 `/models` 可用模型列表自动拉取。
   - 支持双目标语言智能路由、单词/短语词典模式自动分流（音标、词性释义、词形变化、双语例句）、开发者 `camelCase` / `snake_case` 标识符自动拆词、自定义术语表（Glossary）注入与 PDF/OCR 智能断行合并。
-- **AI 文本润色、一键回填替换与语音朗读**
-  - 支持通用流畅、学术正式、商务邮件、口语自然、精简凝练、代码命名（`CodeNaming` 四种命名规范生成）与自定义 Prompt 共 7 种润色风格，多模型并发流式对比。
-  - 支持**一键回填替换原文**（卡片「回填」按钮或 `Ctrl+Shift+Enter` 直接替换来源窗口选中文本）、一键/自动流式回译验证、本地词级 Myers Diff 高亮对比，以及原文/译文系统原生离线/自然语音 TTS 朗读。
+- **统一单页专属 AI 润色卡片、一键回填替换与语音朗读**
+  - 翻译与润色统一呈现在同一 Fluent 2 单页弹窗内：支持配置专属 AI 润色服务卡片（可选自动并发润色或零 Token 消耗的按需点击润色），涵盖通用流畅、学术正式、商务邮件、口语自然、精简凝练、代码命名（`CodeNaming` 四种命名规范生成）与自定义 Prompt 共 7 种可卡片内实时切换的润色风格。
+  - 支持**一键回填替换原文**（卡片「回填替换原文」按钮或 `Ctrl+Shift+Enter` 直接替换来源窗口选中文本）、一键/自动流式回译核对、本地词级 Myers Diff 高亮对比，以及原文/译文系统原生离线/自然语音 TTS 朗读。
 - **多显示器高 DPI 截图翻译与静默截图 OCR**
   - 逐显示器高帧率冻结画面框选，完美适配混合 DPI 多屏环境；支持常规截图翻译（`Alt+S`）与**静默截图 OCR**（`Alt+Shift+S` 或截图时按住 `Ctrl` / `Ctrl+C` 直接识别文字写入剪贴板，不弹窗）。
   - 默认内置 Windows 11 原生离线 OCR（`Windows.Media.Ocr` 零拷贝直通），并支持一键切换视觉大模型 OCR 的**纯文本 / Markdown 表格提取 / LaTeX 公式识别**三种专业模式（失败自动回退本地 OCR）及弹窗内缩略图重识别。
@@ -42,7 +42,7 @@ PopTranslate.sln
 ├── src/
 │   ├── PopTranslate.Core/     # 纯 .NET 10 领域层：契约接口、数据模型、翻译/润色/词典/OCR 编排、模型发现、本地 Diff、DPAPI 配置与代理工厂
 │   ├── PopTranslate.Win32/    # Windows 11 原生互操作层：CsWin32 全局热键、UIA 取词、防污染剪贴板、原文回填、原生 TTS、多屏截图、Windows OCR 与提权自启
-│   └── PopTranslate.App/      # WinUI 3 Unpackaged 桌面端：单实例 CLI 管道、托盘常驻、双动作悬浮胶囊、Acrylic 翻译/润色弹窗、Mica 设置窗口
+│   └── PopTranslate.App/      # WinUI 3 Unpackaged 桌面端：单实例 CLI 管道、托盘常驻、轻量悬浮图标、Fluent 2 统一单页弹窗、Mica 设置窗口
 └── tests/
     └── PopTranslate.Tests/    # xUnit 单元测试、契约测试与端到端统一升级集成测试
 ```
@@ -96,7 +96,7 @@ dotnet build src/PopTranslate.App/PopTranslate.App.csproj -c Release -p:Platform
 ```powershell
 PopTranslate.App.exe translate              # 触发当前选中文本翻译
 PopTranslate.App.exe translate "Hello"      # 直接弹出并翻译指定文本
-PopTranslate.App.exe polish "draft text"    # 直接以润色模式打开并润色指定文本
+PopTranslate.App.exe polish "draft text"    # 打开统一单页弹窗并立即触发 AI 润色卡片
 PopTranslate.App.exe ocr                    # 触发截图翻译
 PopTranslate.App.exe silent-ocr             # 触发静默截图 OCR（直接写入剪贴板）
 PopTranslate.App.exe input                  # 打开输入翻译弹窗并聚焦输入框
