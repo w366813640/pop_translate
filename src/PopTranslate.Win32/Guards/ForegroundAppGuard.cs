@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Runtime.InteropServices;
 using PopTranslate.Core.Contracts;
 using PopTranslate.Core.Models;
 using Windows.Win32;
@@ -13,6 +12,9 @@ namespace PopTranslate.Win32.Guards;
 
 public sealed class ForegroundAppGuard : IForegroundAppGuard
 {
+    private const string UwpFrameHostProcessName = "ApplicationFrameHost.exe";
+    private const string UwpCoreWindowClassName = "Windows.UI.Core.CoreWindow";
+
     private static readonly HashSet<string> ShellDesktopClassNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "Progman",
@@ -20,7 +22,7 @@ public sealed class ForegroundAppGuard : IForegroundAppGuard
         "Shell_TrayWnd",
         "Shell_SecondaryTrayWnd",
         "NotifyIconOverflowWindow",
-        "Windows.UI.Core.CoreWindow",
+        UwpCoreWindowClassName,
     };
 
     public bool IsForegroundAppSuppressed(SelectionConfig config, out string? reason, out string? processName)
@@ -95,16 +97,6 @@ public sealed class ForegroundAppGuard : IForegroundAppGuard
             return false;
         }
 
-        if (PInvoke.SHQueryUserNotificationState(out var state).Succeeded)
-        {
-            if (state is QUERY_USER_NOTIFICATION_STATE.QUNS_BUSY
-                or QUERY_USER_NOTIFICATION_STATE.QUNS_RUNNING_D3D_FULL_SCREEN
-                or QUERY_USER_NOTIFICATION_STATE.QUNS_PRESENTATION_MODE)
-            {
-                return true;
-            }
-        }
-
         if (!PInvoke.IsWindowVisible(hwnd) || PInvoke.IsIconic(hwnd))
         {
             return false;
@@ -115,6 +107,8 @@ public sealed class ForegroundAppGuard : IForegroundAppGuard
             return false;
         }
 
+        // Check fullscreen strictly per-monitor (MonitorFromWindow) rather than global QUNS_BUSY
+        // so fullscreen video/game on Monitor 2 never blocks normal apps on Monitor 1!
         var monitor = PInvoke.MonitorFromWindow(hwnd, MONITOR_FROM_FLAGS.MONITOR_DEFAULTTONEAREST);
         if (monitor == HMONITOR.Null)
         {
@@ -137,6 +131,13 @@ public sealed class ForegroundAppGuard : IForegroundAppGuard
         if (!coversEntireMonitor)
         {
             return false;
+        }
+
+        if (PInvoke.SHQueryUserNotificationState(out var state).Succeeded &&
+            state is QUERY_USER_NOTIFICATION_STATE.QUNS_RUNNING_D3D_FULL_SCREEN
+                or QUERY_USER_NOTIFICATION_STATE.QUNS_PRESENTATION_MODE)
+        {
+            return true;
         }
 
         // Avoid treating a standard titled window maximized over an auto-hidden taskbar as fullscreen.
@@ -177,6 +178,79 @@ public sealed class ForegroundAppGuard : IForegroundAppGuard
             return null;
         }
 
+        var hostProcessName = TryResolveProcessFileName(processId);
+        if (string.Equals(hostProcessName, UwpFrameHostProcessName, StringComparison.OrdinalIgnoreCase))
+        {
+            var childPid = ResolveUwpChildProcessId(hwnd, processId);
+            if (childPid != 0)
+            {
+                var childProcessName = TryResolveProcessFileName(childPid);
+                if (!string.IsNullOrWhiteSpace(childProcessName))
+                {
+                    return childProcessName;
+                }
+            }
+        }
+
+        return hostProcessName;
+    }
+
+    internal static string NormalizeProcessName(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return string.Empty;
+        }
+
+        var trimmed = name.Trim().Trim('"');
+        var fileName = Path.GetFileName(trimmed);
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            return string.Empty;
+        }
+
+        if (fileName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+        {
+            fileName = fileName[..^4];
+        }
+
+        return fileName.Trim();
+    }
+
+    private static unsafe uint ResolveUwpChildProcessId(HWND frameHwnd, uint frameProcessId)
+    {
+        uint coreWindowChildPid = 0;
+        uint firstDifferentChildPid = 0;
+
+        WNDENUMPROC callback = (childHwnd, _) =>
+        {
+            uint childPid = 0;
+            PInvoke.GetWindowThreadProcessId(childHwnd, &childPid);
+            if (childPid == 0 || childPid == frameProcessId)
+            {
+                return true;
+            }
+
+            if (firstDifferentChildPid == 0)
+            {
+                firstDifferentChildPid = childPid;
+            }
+
+            if (HasWindowClassName(childHwnd, UwpCoreWindowClassName))
+            {
+                coreWindowChildPid = childPid;
+                return false;
+            }
+
+            return true;
+        };
+
+        PInvoke.EnumChildWindows(frameHwnd, callback, new LPARAM(0));
+        return coreWindowChildPid != 0 ? coreWindowChildPid : firstDifferentChildPid;
+    }
+
+    private static unsafe string? TryResolveProcessFileName(uint processId)
+    {
         // PROCESS_QUERY_LIMITED_INFORMATION works across elevation boundaries for reading image paths.
         var processHandle = PInvoke.OpenProcess(
             PROCESS_ACCESS_RIGHTS.PROCESS_QUERY_LIMITED_INFORMATION,
@@ -221,28 +295,6 @@ public sealed class ForegroundAppGuard : IForegroundAppGuard
         }
     }
 
-    internal static string NormalizeProcessName(string? name)
-    {
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            return string.Empty;
-        }
-
-        var trimmed = name.Trim().Trim('"');
-        var fileName = Path.GetFileName(trimmed);
-        if (string.IsNullOrWhiteSpace(fileName))
-        {
-            return string.Empty;
-        }
-
-        if (fileName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
-        {
-            fileName = fileName[..^4];
-        }
-
-        return fileName.Trim();
-    }
-
     private static unsafe bool IsDesktopOrShellWindow(HWND hwnd)
     {
         if (hwnd == PInvoke.GetDesktopWindow() || hwnd == PInvoke.GetShellWindow())
@@ -265,5 +317,20 @@ public sealed class ForegroundAppGuard : IForegroundAppGuard
         }
 
         return false;
+    }
+
+    private static unsafe bool HasWindowClassName(HWND hwnd, string expectedClassName)
+    {
+        Span<char> classNameBuffer = stackalloc char[256];
+        fixed (char* pClassName = classNameBuffer)
+        {
+            var length = PInvoke.GetClassName(hwnd, pClassName, classNameBuffer.Length);
+            if (length <= 0)
+            {
+                return false;
+            }
+
+            return classNameBuffer[..length].Equals(expectedClassName.AsSpan(), StringComparison.OrdinalIgnoreCase);
+        }
     }
 }

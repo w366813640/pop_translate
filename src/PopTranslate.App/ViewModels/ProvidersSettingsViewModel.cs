@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using PopTranslate.Core.Contracts;
 using PopTranslate.Core.Models;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -146,29 +147,44 @@ public sealed partial class ProvidersSettingsViewModel : ObservableObject
     private readonly ISettingsStore _settingsStore;
     private readonly ISecretProtector _secretProtector;
     private readonly ITranslationOrchestrator _translationOrchestrator;
+    private readonly IModelDiscoveryService _modelDiscoveryService;
     private bool _isLoading;
+    private bool _isDirty;
+    private bool _suppressDiscoveredModelSync;
 
     public ProvidersSettingsViewModel(
         ISettingsStore settingsStore,
         ISecretProtector secretProtector,
-        ITranslationOrchestrator translationOrchestrator)
+        ITranslationOrchestrator translationOrchestrator,
+        IModelDiscoveryService modelDiscoveryService)
     {
         _settingsStore = settingsStore;
         _secretProtector = secretProtector;
         _translationOrchestrator = translationOrchestrator;
+        _modelDiscoveryService = modelDiscoveryService;
     }
 
     public ObservableCollection<ProviderItemViewModel> Providers { get; } = [];
+
+    public ObservableCollection<string> DiscoveredModels { get; } = [];
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasSelectedProvider))]
     [NotifyPropertyChangedFor(nameof(HasNoSelectedProvider))]
     [NotifyPropertyChangedFor(nameof(CanTestConnection))]
+    [NotifyPropertyChangedFor(nameof(CanFetchModels))]
     public partial ProviderItemViewModel? SelectedProvider { get; set; }
+
+    [ObservableProperty]
+    public partial string? SelectedDiscoveredModel { get; set; }
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CanTestConnection))]
     public partial bool IsTestingConnection { get; set; }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanFetchModels))]
+    public partial bool IsFetchingModels { get; set; }
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasFeedback))]
@@ -184,6 +200,10 @@ public sealed partial class ProvidersSettingsViewModel : ObservableObject
 
     public bool CanTestConnection => HasSelectedProvider && !IsTestingConnection;
 
+    public bool CanFetchModels => SelectedProvider is { IsOpenAi: true } && !IsFetchingModels;
+
+    public bool HasDiscoveredModels => DiscoveredModels.Count > 0;
+
     public bool HasFeedback => !string.IsNullOrWhiteSpace(FeedbackMessage);
 
     public InfoBarSeverity FeedbackSeverity => IsFeedbackError ? InfoBarSeverity.Error : InfoBarSeverity.Success;
@@ -194,7 +214,9 @@ public sealed partial class ProvidersSettingsViewModel : ObservableObject
         try
         {
             var previousId = SelectedProvider?.Id;
+            DetachAllProviderListeners();
             Providers.Clear();
+            ClearDiscoveredModels();
 
             foreach (var config in settings.Providers.OrderBy(p => p.SortOrder))
             {
@@ -205,12 +227,15 @@ public sealed partial class ProvidersSettingsViewModel : ObservableObject
                     plaintextKey = decrypted;
                 }
 
-                Providers.Add(new ProviderItemViewModel(config, plaintextKey, OnItemEnabledToggled));
+                var item = new ProviderItemViewModel(config, plaintextKey, OnItemEnabledToggled);
+                item.PropertyChanged += OnProviderItemPropertyChanged;
+                Providers.Add(item);
             }
 
             SelectedProvider = Providers.FirstOrDefault(p => p.Id == previousId)
                 ?? Providers.FirstOrDefault();
 
+            _isDirty = false;
             FeedbackMessage = null;
             IsFeedbackError = false;
         }
@@ -220,28 +245,78 @@ public sealed partial class ProvidersSettingsViewModel : ObservableObject
         }
     }
 
-    [RelayCommand]
-    private async Task AddOpenAiProviderAsync()
+    public async Task FlushIfDirtyAsync()
     {
-        var count = Providers.Count(p => p.Kind == ProviderKind.OpenAiCompatible) + 1;
+        if (!_isDirty || _isLoading)
+        {
+            return;
+        }
+
+        await SaveAllProvidersCoreAsync(successMessage: null);
+    }
+
+    partial void OnSelectedProviderChanged(ProviderItemViewModel? value)
+    {
+        ClearDiscoveredModels();
+    }
+
+    partial void OnSelectedDiscoveredModelChanged(string? value)
+    {
+        if (_suppressDiscoveredModelSync || _isLoading || string.IsNullOrWhiteSpace(value) || SelectedProvider is null)
+        {
+            return;
+        }
+
+        SelectedProvider.Model = value;
+    }
+
+    [RelayCommand]
+    private Task AddOpenAiProviderAsync() => AddLlmPresetAsync("custom");
+
+    [RelayCommand]
+    private async Task AddLlmPresetAsync(string? presetKey)
+    {
+        var (baseName, baseUrl, model, keylessHint) = (presetKey?.Trim().ToLowerInvariant()) switch
+        {
+            "openai" => ("OpenAI", "https://api.openai.com/v1", "gpt-4o-mini", false),
+            "deepseek" => ("DeepSeek", "https://api.deepseek.com/v1", "deepseek-chat", false),
+            "gemini" => ("Google Gemini", "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-2.5-flash", false),
+            "siliconflow" => ("SiliconFlow (硅基流动)", "https://api.siliconflow.cn/v1", "Qwen/Qwen2.5-7B-Instruct", false),
+            "ollama" => ("Ollama (本地免密钥)", "http://localhost:11434/v1", "qwen2.5:7b", true),
+            "openrouter" => ("OpenRouter", "https://openrouter.ai/api/v1", "openai/gpt-4o-mini", false),
+            "dashscope" => ("通义千问 (DashScope)", "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus", false),
+            "zhipu" => ("智谱 GLM", "https://open.bigmodel.cn/api/paas/v4", "glm-4-flash", false),
+            _ => ("OpenAI 兼容服务", "https://api.openai.com/v1", "gpt-4o-mini", false),
+        };
+
+        var samePresetCount = Providers.Count(p =>
+            p.Kind == ProviderKind.OpenAiCompatible &&
+            p.DisplayName.StartsWith(baseName, StringComparison.OrdinalIgnoreCase)) + 1;
+
+        var displayName = samePresetCount == 1 ? baseName : $"{baseName} #{samePresetCount}";
         var config = new ProviderInstanceConfig
         {
             Id = $"openai-{Guid.NewGuid():N}",
-            DisplayName = count == 1 ? "OpenAI 兼容服务" : $"OpenAI 兼容服务 #{count}",
+            DisplayName = displayName,
             Kind = ProviderKind.OpenAiCompatible,
             Enabled = true,
             SortOrder = Providers.Count,
-            BaseUrl = "https://api.openai.com/v1",
-            Model = "gpt-4o-mini",
+            BaseUrl = baseUrl,
+            Model = model,
             SystemPrompt = ProviderInstanceConfig.DefaultOpenAiSystemPrompt,
             Temperature = 0.2,
             TimeoutSeconds = 30,
         };
 
         var vm = new ProviderItemViewModel(config, string.Empty, OnItemEnabledToggled);
+        vm.PropertyChanged += OnProviderItemPropertyChanged;
         Providers.Add(vm);
         SelectedProvider = vm;
-        await SaveAllProvidersAsync("已添加新的 OpenAI 兼容实例，请填写 API Key 后保存。");
+
+        var message = keylessHint
+            ? $"已添加「{displayName}」预设实例（本地免密钥），可直接拉取模型或测试连接。"
+            : $"已添加「{displayName}」预设实例，请填写 API Key 后测试或使用。";
+        await SaveAllProvidersAsync(message);
     }
 
     [RelayCommand]
@@ -260,6 +335,7 @@ public sealed partial class ProvidersSettingsViewModel : ObservableObject
         };
 
         var vm = new ProviderItemViewModel(config, string.Empty, OnItemEnabledToggled);
+        vm.PropertyChanged += OnProviderItemPropertyChanged;
         Providers.Add(vm);
         SelectedProvider = vm;
         await SaveAllProvidersAsync("已添加 DeepL 实例，请填写 API Key 后保存。");
@@ -281,6 +357,7 @@ public sealed partial class ProvidersSettingsViewModel : ObservableObject
         };
 
         var vm = new ProviderItemViewModel(config, string.Empty, OnItemEnabledToggled);
+        vm.PropertyChanged += OnProviderItemPropertyChanged;
         Providers.Add(vm);
         SelectedProvider = vm;
         await SaveAllProvidersAsync("已添加零配置免费翻译服务。");
@@ -300,7 +377,9 @@ public sealed partial class ProvidersSettingsViewModel : ObservableObject
             return;
         }
 
-        var removedName = SelectedProvider.DisplayName;
+        var removed = SelectedProvider;
+        removed.PropertyChanged -= OnProviderItemPropertyChanged;
+        var removedName = removed.DisplayName;
         Providers.RemoveAt(index);
         SelectedProvider = Providers.Count == 0
             ? null
@@ -365,11 +444,96 @@ public sealed partial class ProvidersSettingsViewModel : ObservableObject
     }
 
     [RelayCommand]
+    private async Task FetchModelsAsync()
+    {
+        if (SelectedProvider is not { IsOpenAi: true } provider || IsFetchingModels)
+        {
+            return;
+        }
+
+        var baseUrl = provider.BaseUrl?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(baseUrl))
+        {
+            IsFeedbackError = true;
+            FeedbackMessage = "请先填写 API Base URL 后再拉取模型列表。";
+            return;
+        }
+
+        IsFetchingModels = true;
+        IsFeedbackError = false;
+        FeedbackMessage = $"正在从「{provider.DisplayName}」拉取可用模型...";
+
+        try
+        {
+            var models = await _modelDiscoveryService.FetchModelsAsync(baseUrl, provider.ApiKeyPlaintext);
+
+            // Guard against user switching provider while request was in flight.
+            if (!ReferenceEquals(SelectedProvider, provider))
+            {
+                return;
+            }
+
+            _suppressDiscoveredModelSync = true;
+            try
+            {
+                DiscoveredModels.Clear();
+                foreach (var model in models)
+                {
+                    if (!string.IsNullOrWhiteSpace(model))
+                    {
+                        DiscoveredModels.Add(model);
+                    }
+                }
+
+                OnPropertyChanged(nameof(HasDiscoveredModels));
+
+                if (DiscoveredModels.Count == 0)
+                {
+                    SelectedDiscoveredModel = null;
+                    IsFeedbackError = true;
+                    FeedbackMessage = "服务端未返回可用模型列表，请手动填写模型名称。";
+                    return;
+                }
+
+                if (string.IsNullOrWhiteSpace(provider.Model))
+                {
+                    provider.Model = DiscoveredModels[0];
+                }
+
+                SelectedDiscoveredModel = DiscoveredModels.FirstOrDefault(
+                    m => string.Equals(m, provider.Model, StringComparison.Ordinal));
+            }
+            finally
+            {
+                _suppressDiscoveredModelSync = false;
+            }
+
+            IsFeedbackError = false;
+            FeedbackMessage = $"成功拉取 {DiscoveredModels.Count} 个可用模型，可在下拉框中快速选择。";
+        }
+        catch (Exception ex)
+        {
+            IsFeedbackError = true;
+            FeedbackMessage = $"拉取模型列表失败：{ex.Message}";
+        }
+        finally
+        {
+            IsFetchingModels = false;
+        }
+    }
+
+    [RelayCommand]
     private async Task TestSelectedProviderAsync()
     {
         if (SelectedProvider is null || IsTestingConnection)
         {
             return;
+        }
+
+        var wasDirty = _isDirty;
+        if (wasDirty)
+        {
+            await SaveAllProvidersCoreAsync(successMessage: null);
         }
 
         IsTestingConnection = true;
@@ -381,9 +545,15 @@ public sealed partial class ProvidersSettingsViewModel : ObservableObject
             var tempConfig = SelectedProvider.ToConfig(_secretProtector, SelectedProvider.SortOrder);
             var result = await _translationOrchestrator.TestProviderAsync(tempConfig);
             IsFeedbackError = !result.IsSuccess;
-            FeedbackMessage = result.IsSuccess
-                ? $"连接成功 ({Math.Round(result.Latency.TotalMilliseconds)} ms)：{result.Message}"
-                : $"连接失败：{result.Message}";
+            if (result.IsSuccess)
+            {
+                var savedNote = wasDirty ? "（配置已自动保存）" : string.Empty;
+                FeedbackMessage = $"连接成功{savedNote} ({Math.Round(result.Latency.TotalMilliseconds)} ms)：{result.Message}";
+            }
+            else
+            {
+                FeedbackMessage = $"连接失败：{result.Message}";
+            }
         }
         catch (Exception ex)
         {
@@ -393,6 +563,62 @@ public sealed partial class ProvidersSettingsViewModel : ObservableObject
         finally
         {
             IsTestingConnection = false;
+        }
+    }
+
+    private void OnProviderItemPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (_isLoading)
+        {
+            return;
+        }
+
+        if (e.PropertyName is nameof(ProviderItemViewModel.SortOrder) or nameof(ProviderItemViewModel.Enabled))
+        {
+            return;
+        }
+
+        _isDirty = true;
+
+        if (e.PropertyName == nameof(ProviderItemViewModel.Model) &&
+            !_suppressDiscoveredModelSync &&
+            sender is ProviderItemViewModel item &&
+            ReferenceEquals(item, SelectedProvider) &&
+            DiscoveredModels.Count > 0)
+        {
+            _suppressDiscoveredModelSync = true;
+            try
+            {
+                SelectedDiscoveredModel = DiscoveredModels.FirstOrDefault(
+                    m => string.Equals(m, item.Model, StringComparison.Ordinal));
+            }
+            finally
+            {
+                _suppressDiscoveredModelSync = false;
+            }
+        }
+    }
+
+    private void DetachAllProviderListeners()
+    {
+        foreach (var item in Providers)
+        {
+            item.PropertyChanged -= OnProviderItemPropertyChanged;
+        }
+    }
+
+    private void ClearDiscoveredModels()
+    {
+        _suppressDiscoveredModelSync = true;
+        try
+        {
+            DiscoveredModels.Clear();
+            SelectedDiscoveredModel = null;
+            OnPropertyChanged(nameof(HasDiscoveredModels));
+        }
+        finally
+        {
+            _suppressDiscoveredModelSync = false;
         }
     }
 
@@ -408,7 +634,10 @@ public sealed partial class ProvidersSettingsViewModel : ObservableObject
             : $"已停用「{item.DisplayName}」。");
     }
 
-    private async Task SaveAllProvidersAsync(string successMessage)
+    private Task SaveAllProvidersAsync(string successMessage) =>
+        SaveAllProvidersCoreAsync(successMessage);
+
+    private async Task SaveAllProvidersCoreAsync(string? successMessage)
     {
         try
         {
@@ -422,8 +651,12 @@ public sealed partial class ProvidersSettingsViewModel : ObservableObject
                 .ToList();
 
             await _settingsStore.SaveAsync(updated);
-            IsFeedbackError = false;
-            FeedbackMessage = successMessage;
+            _isDirty = false;
+            if (!string.IsNullOrWhiteSpace(successMessage))
+            {
+                IsFeedbackError = false;
+                FeedbackMessage = successMessage;
+            }
         }
         catch (Exception ex)
         {

@@ -36,6 +36,9 @@ public sealed partial class HotkeysSettingsPage : Page
     private void ScreenshotHotkey_GestureChanged(object sender, HotkeyGesture e) =>
         ViewModel.UpdateGesture(HotkeyAction.ScreenshotTranslate, e);
 
+    private void SilentOcrHotkey_GestureChanged(object sender, HotkeyGesture e) =>
+        ViewModel.UpdateGesture(HotkeyAction.SilentOcr, e);
+
     private void SelectionPolishHotkey_GestureChanged(object sender, HotkeyGesture e) =>
         ViewModel.UpdateGesture(HotkeyAction.SelectionPolish, e);
 
@@ -48,6 +51,41 @@ public sealed partial class HotkeysSettingsPage : Page
             {
                 ViewModel.AddBlacklistProcessCommand.Execute(null);
             }
+        }
+    }
+
+    private void RunningProcessesFlyout_Opening(object? sender, object e)
+    {
+        RunningProcessesFlyout.Items.Clear();
+        var runningProcesses = ViewModel.GetRunningWindowProcessNames();
+        if (runningProcesses.Count == 0)
+        {
+            RunningProcessesFlyout.Items.Add(new MenuFlyoutItem
+            {
+                Text = "暂无其他可添加的运行中窗口进程",
+                IsEnabled = false,
+            });
+            return;
+        }
+
+        foreach (var exeName in runningProcesses)
+        {
+            var menuItem = new MenuFlyoutItem
+            {
+                Text = exeName,
+                Tag = exeName,
+            };
+            menuItem.Click += RunningProcessMenuItem_Click;
+            RunningProcessesFlyout.Items.Add(menuItem);
+        }
+    }
+
+    private void RunningProcessMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: string processName } &&
+            ViewModel.AddRunningBlacklistProcessCommand.CanExecute(processName))
+        {
+            ViewModel.AddRunningBlacklistProcessCommand.Execute(processName);
         }
     }
 

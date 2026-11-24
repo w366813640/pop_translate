@@ -1,10 +1,12 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Security;
 using System.Security.Principal;
-using PopTranslate.Core.Contracts;
-using PopTranslate.Core.Models;
+using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Win32;
+using PopTranslate.Core.Contracts;
+using PopTranslate.Core.Models;
 
 namespace PopTranslate.Win32.Startup;
 
@@ -68,6 +70,12 @@ public sealed class StartupPrivilegeService : IStartupPrivilegeService
         {
             var formatted = FormatStandardStartupValue(executablePath);
             key.SetValue(_registryValueName, formatted, RegistryValueKind.String);
+
+            // Best-effort cleanup of elevated scheduled task so standard & elevated startup never race at logon.
+            if (ShouldSyncDefaultMutualExclusion() && IsRunningAsAdministrator())
+            {
+                TryDeleteElevatedTaskBestEffort();
+            }
         }
         else
         {
@@ -111,41 +119,52 @@ public sealed class StartupPrivilegeService : IStartupPrivilegeService
                 RequiresElevation: true);
         }
 
+        string? tempXmlPath = null;
         try
         {
-            if (!enabled && !IsElevatedStartupTaskEnabled())
+            if (!enabled)
             {
-                return new PrivilegeOperationResult(
-                    Succeeded: true,
-                    Message: "Elevated startup task is already disabled.",
-                    RequiresElevation: false);
+                var isCurrentlyEnabled = await IsElevatedStartupTaskEnabledAsync(cancellationToken).ConfigureAwait(false);
+                if (!isCurrentlyEnabled)
+                {
+                    return new PrivilegeOperationResult(
+                        Succeeded: true,
+                        Message: "Elevated startup task is already disabled.",
+                        RequiresElevation: false);
+                }
+
+                var deleteArgs = BuildSchtasksDeleteArguments(_elevatedTaskName);
+                var (delExitCode, delOut, delErr) = await RunSchtasksAsync(deleteArgs, cancellationToken).ConfigureAwait(false);
+                if (delExitCode == 0)
+                {
+                    return new PrivilegeOperationResult(
+                        Succeeded: true,
+                        Message: "Elevated auto-start task removed successfully.",
+                        RequiresElevation: false);
+                }
+
+                return BuildSchtasksFailureResult(delExitCode, delOut, delErr);
             }
 
-            var args = enabled
-                ? BuildSchtasksCreateArguments(_elevatedTaskName, cleanPath)
-                : BuildSchtasksDeleteArguments(_elevatedTaskName);
+            tempXmlPath = Path.Combine(Path.GetTempPath(), $"PopTranslate_Task_{Guid.NewGuid():N}.xml");
+            var taskXml = BuildElevatedTaskXml(cleanPath, GetCurrentUserSidOrName());
+            await File.WriteAllTextAsync(tempXmlPath, taskXml, Encoding.Unicode, cancellationToken)
+                .ConfigureAwait(false);
 
-            var (exitCode, stdOut, stdErr) = await RunSchtasksAsync(args, cancellationToken).ConfigureAwait(false);
+            var createXmlArgs = BuildSchtasksCreateXmlArguments(_elevatedTaskName, tempXmlPath);
+            var (exitCode, stdOut, stdErr) = await RunSchtasksAsync(createXmlArgs, cancellationToken).ConfigureAwait(false);
             if (exitCode == 0)
             {
+                // Mutual exclusion: remove HKCU Run entry so Standard and Elevated startup never race at logon.
+                TryDeleteStandardStartupBestEffort();
+
                 return new PrivilegeOperationResult(
                     Succeeded: true,
-                    Message: enabled
-                        ? "UAC-free elevated auto-start task configured successfully."
-                        : "Elevated auto-start task removed successfully.",
+                    Message: "UAC-free elevated auto-start task configured successfully.",
                     RequiresElevation: false);
             }
 
-            var detail = !string.IsNullOrWhiteSpace(stdErr) ? stdErr.Trim() : stdOut.Trim();
-            if (string.IsNullOrWhiteSpace(detail))
-            {
-                detail = $"schtasks.exe exited with code {exitCode}.";
-            }
-
-            return new PrivilegeOperationResult(
-                Succeeded: false,
-                Message: $"Failed to update elevated startup task: {detail}",
-                RequiresElevation: false);
+            return BuildSchtasksFailureResult(exitCode, stdOut, stdErr);
         }
         catch (OperationCanceledException)
         {
@@ -157,6 +176,23 @@ public sealed class StartupPrivilegeService : IStartupPrivilegeService
                 Succeeded: false,
                 Message: $"Failed to execute schtasks.exe: {ex.Message}",
                 RequiresElevation: false);
+        }
+        finally
+        {
+            if (!string.IsNullOrEmpty(tempXmlPath))
+            {
+                try
+                {
+                    if (File.Exists(tempXmlPath))
+                    {
+                        File.Delete(tempXmlPath);
+                    }
+                }
+                catch
+                {
+                    // Best-effort cleanup of temporary Task XML.
+                }
+            }
         }
     }
 
@@ -218,10 +254,154 @@ public sealed class StartupPrivilegeService : IStartupPrivilegeService
         return $"/Create /TN \"{safeTask}\" /TR \"\\\"{cleanPath}\\\" --minimized\" /SC ONLOGON /RL HIGHEST /F";
     }
 
+    public static string BuildSchtasksCreateXmlArguments(string taskName, string xmlFilePath)
+    {
+        var safeTask = ValidateTaskName(taskName);
+        if (!TrySanitizeExecutablePath(xmlFilePath, out var cleanXmlPath, out var error))
+        {
+            throw new ArgumentException(error, nameof(xmlFilePath));
+        }
+
+        return $"/Create /TN \"{safeTask}\" /XML \"{cleanXmlPath}\" /F";
+    }
+
     public static string BuildSchtasksDeleteArguments(string taskName)
     {
         var safeTask = ValidateTaskName(taskName);
         return $"/Delete /TN \"{safeTask}\" /F";
+    }
+
+    public static string BuildElevatedTaskXml(string executablePath, string? userId = null)
+    {
+        if (!TrySanitizeExecutablePath(executablePath, out var cleanPath, out var error))
+        {
+            throw new ArgumentException(error, nameof(executablePath));
+        }
+
+        var escapedCommand = SecurityElement.Escape($"\"{cleanPath}\"");
+        var workingDir = Path.GetDirectoryName(cleanPath);
+        var workingDirElement = !string.IsNullOrWhiteSpace(workingDir)
+            ? $"\n      <WorkingDirectory>{SecurityElement.Escape(workingDir)}</WorkingDirectory>"
+            : string.Empty;
+
+        var resolvedUser = string.IsNullOrWhiteSpace(userId) ? GetCurrentUserSidOrName() : userId.Trim();
+        var userIdElement = !string.IsNullOrWhiteSpace(resolvedUser)
+            ? $"\n      <UserId>{SecurityElement.Escape(resolvedUser)}</UserId>"
+            : string.Empty;
+
+        return
+            $"""
+            <?xml version="1.0" encoding="UTF-16"?>
+            <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+              <Triggers>
+                <LogonTrigger>
+                  <Enabled>true</Enabled>{userIdElement}
+                </LogonTrigger>
+              </Triggers>
+              <Principals>
+                <Principal id="Author">{userIdElement}
+                  <LogonType>InteractiveToken</LogonType>
+                  <RunLevel>HighestAvailable</RunLevel>
+                </Principal>
+              </Principals>
+              <Settings>
+                <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+                <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+                <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+                <AllowHardTerminate>true</AllowHardTerminate>
+                <StartWhenAvailable>false</StartWhenAvailable>
+                <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+                <AllowStartOnDemand>true</AllowStartOnDemand>
+                <Enabled>true</Enabled>
+                <Hidden>false</Hidden>
+                <RunOnlyIfIdle>false</RunOnlyIfIdle>
+                <WakeToRun>false</WakeToRun>
+                <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+                <Priority>7</Priority>
+              </Settings>
+              <Actions Context="Author">
+                <Exec>
+                  <Command>{escapedCommand}</Command>
+                  <Arguments>--minimized</Arguments>{workingDirElement}
+                </Exec>
+              </Actions>
+            </Task>
+            """;
+    }
+
+    private async Task<bool> IsElevatedStartupTaskEnabledAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var args = BuildSchtasksQueryArguments(_elevatedTaskName);
+            var (exitCode, _, _) = await RunSchtasksAsync(args, cancellationToken).ConfigureAwait(false);
+            return exitCode == 0;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private bool ShouldSyncDefaultMutualExclusion() =>
+        string.Equals(_registryValueName, DefaultRegistryValueName, StringComparison.OrdinalIgnoreCase) ||
+        !string.Equals(_elevatedTaskName, DefaultElevatedTaskName, StringComparison.OrdinalIgnoreCase);
+
+    private void TryDeleteStandardStartupBestEffort()
+    {
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(_runRegistrySubKey, writable: true);
+            key?.DeleteValue(_registryValueName, throwOnMissingValue: false);
+        }
+        catch
+        {
+            // Best-effort cleanup of standard HKCU Run value.
+        }
+    }
+
+    private void TryDeleteElevatedTaskBestEffort()
+    {
+        try
+        {
+            var deleteArgs = BuildSchtasksDeleteArguments(_elevatedTaskName);
+            _ = RunSchtasksSync(deleteArgs);
+        }
+        catch
+        {
+            // Best-effort cleanup of elevated scheduled task.
+        }
+    }
+
+    private static PrivilegeOperationResult BuildSchtasksFailureResult(int exitCode, string stdOut, string stdErr)
+    {
+        var detail = !string.IsNullOrWhiteSpace(stdErr) ? stdErr.Trim() : stdOut.Trim();
+        if (string.IsNullOrWhiteSpace(detail))
+        {
+            detail = $"schtasks.exe exited with code {exitCode}.";
+        }
+
+        return new PrivilegeOperationResult(
+            Succeeded: false,
+            Message: $"Failed to update elevated startup task: {detail}",
+            RequiresElevation: false);
+    }
+
+    private static string? GetCurrentUserSidOrName()
+    {
+        try
+        {
+            using var identity = WindowsIdentity.GetCurrent();
+            return identity.User?.Value ?? identity.Name;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static bool CheckCurrentProcessElevation()

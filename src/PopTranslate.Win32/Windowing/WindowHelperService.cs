@@ -12,6 +12,7 @@ namespace PopTranslate.Win32.Windowing;
 public sealed class WindowHelperService : IWindowHelperService
 {
     private const uint MonitorInfoPrimaryFlag = 0x00000001;
+    private const double DpiScaleComparisonEpsilon = 0.005;
     private static readonly HWND HwndTopMost = new(-1);
     private static readonly HWND HwndNoTopMost = new(-2);
 
@@ -239,13 +240,45 @@ public sealed class WindowHelperService : IWindowHelperService
             return;
         }
 
+        var safeWidth = Math.Max(1, width);
+        var safeHeight = Math.Max(1, height);
+
+        var initialScale = GetDpiScaleForWindow(windowHandle);
+        var targetMonitor = GetMonitorAtPoint(new ScreenPoint(x, y));
+        var crossingDpiBoundary = Math.Abs(targetMonitor.DpiScale - initialScale) > DpiScaleComparisonEpsilon;
+
+        if (crossingDpiBoundary)
+        {
+            // Move window origin onto target monitor first without resizing so synchronous WM_DPICHANGED
+            // completes before we apply the caller's target-DPI physical pixel dimensions.
+            PInvoke.SetWindowPos(
+                hwnd,
+                HWND.Null,
+                x,
+                y,
+                0,
+                0,
+                SET_WINDOW_POS_FLAGS.SWP_NOSIZE |
+                SET_WINDOW_POS_FLAGS.SWP_NOZORDER |
+                SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE);
+        }
+
+        var scaleBeforeResize = GetDpiScaleForWindow(windowHandle);
         var flags = SET_WINDOW_POS_FLAGS.SWP_NOZORDER;
         if (!activate)
         {
             flags |= SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE;
         }
 
-        PInvoke.SetWindowPos(hwnd, HWND.Null, x, y, Math.Max(1, width), Math.Max(1, height), flags);
+        PInvoke.SetWindowPos(hwnd, HWND.Null, x, y, safeWidth, safeHeight, flags);
+
+        if (crossingDpiBoundary &&
+            Math.Abs(GetDpiScaleForWindow(windowHandle) - scaleBeforeResize) > DpiScaleComparisonEpsilon)
+        {
+            // If an oversized prior frame kept >50% area on the old monitor until the resize completed,
+            // re-apply exact target pixel bounds after the deferred WM_DPICHANGED fires.
+            PInvoke.SetWindowPos(hwnd, HWND.Null, x, y, safeWidth, safeHeight, flags);
+        }
     }
 
     public void ShowWindowNoActivate(nint windowHandle)

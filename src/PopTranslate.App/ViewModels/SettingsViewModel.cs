@@ -25,6 +25,22 @@ public sealed partial class SettingsViewModel : ObservableObject
 
         Network.RestartAsAdministratorRequested += (_, _) =>
             RestartAsAdministratorRequested?.Invoke(this, EventArgs.Empty);
+
+        General.StandardStartupToggled += (_, enabled) =>
+        {
+            if (enabled)
+            {
+                Network.SyncElevatedStartupFromExternal(false);
+            }
+        };
+
+        Network.ElevatedStartupToggled += (_, enabled) =>
+        {
+            if (enabled)
+            {
+                General.SyncStandardStartupFromExternal(false);
+            }
+        };
     }
 
     public event EventHandler? RestartAsAdministratorRequested;
@@ -51,6 +67,14 @@ public sealed partial class SettingsViewModel : ObservableObject
         await Task.WhenAll(
             Network.LoadFromAsync(current),
             Ocr.LoadFromAsync(current));
+    }
+
+    public async Task FlushPendingChangesAsync()
+    {
+        await General.FlushIfDirtyAsync();
+        await Providers.FlushIfDirtyAsync();
+        await Ocr.FlushIfDirtyAsync();
+        await Network.FlushIfDirtyAsync();
     }
 
     public void UpdateHotkeyRegistrationResults(IReadOnlyDictionary<HotkeyAction, HotkeyRegistrationResult> results)

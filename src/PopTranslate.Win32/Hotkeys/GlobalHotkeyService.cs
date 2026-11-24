@@ -39,6 +39,16 @@ public sealed class GlobalHotkeyService : IGlobalHotkeyService
     public static uint ToWin32Modifiers(HotkeyModifiers modifiers) =>
         (uint)modifiers | (uint)HOT_KEY_MODIFIERS.MOD_NOREPEAT;
 
+    public static string FormatActionDisplayName(HotkeyAction action) => action switch
+    {
+        HotkeyAction.SelectionTranslate => "划词翻译",
+        HotkeyAction.InputTranslate => "输入翻译",
+        HotkeyAction.ScreenshotTranslate => "截图翻译",
+        HotkeyAction.SelectionPolish => "划词润色",
+        HotkeyAction.SilentOcr => "静默截图 OCR",
+        _ => action.ToString(),
+    };
+
     public IReadOnlyDictionary<HotkeyAction, HotkeyRegistrationResult> ApplyHotkeys(HotkeyConfig config)
     {
         ArgumentNullException.ThrowIfNull(config);
@@ -285,13 +295,14 @@ public sealed class GlobalHotkeyService : IGlobalHotkeyService
     {
         UnregisterAllOnPumpThread();
 
-        var results = new Dictionary<HotkeyAction, HotkeyRegistrationResult>(4);
+        var results = new Dictionary<HotkeyAction, HotkeyRegistrationResult>(5);
         var seenGestures = new Dictionary<(HotkeyModifiers, uint), HotkeyAction>();
 
         RegisterSingle(HotkeyAction.SelectionTranslate, config.SelectionTranslate, 1, seenGestures, results);
         RegisterSingle(HotkeyAction.InputTranslate, config.InputTranslate, 2, seenGestures, results);
         RegisterSingle(HotkeyAction.ScreenshotTranslate, config.ScreenshotTranslate, 3, seenGestures, results);
         RegisterSingle(HotkeyAction.SelectionPolish, config.SelectionPolish, 4, seenGestures, results);
+        RegisterSingle(HotkeyAction.SilentOcr, config.SilentOcr, 5, seenGestures, results);
 
         return results;
     }
@@ -312,10 +323,11 @@ public sealed class GlobalHotkeyService : IGlobalHotkeyService
         var key = (gesture.Modifiers, gesture.VirtualKey);
         if (seenGestures.TryGetValue(key, out var existingAction))
         {
+            var conflictDisplayName = FormatActionDisplayName(existingAction);
             results[action] = new HotkeyRegistrationResult(
                 action,
                 Succeeded: false,
-                ErrorMessage: $"Hotkey '{gesture.DisplayText}' conflicts with '{existingAction}'.");
+                ErrorMessage: $"快捷键「{gesture.DisplayText}」与「{conflictDisplayName} ({existingAction})」冲突。");
             return;
         }
 
@@ -330,8 +342,8 @@ public sealed class GlobalHotkeyService : IGlobalHotkeyService
         {
             var err = Marshal.GetLastPInvokeError();
             var errorMessage = err == ErrorHotkeyAlreadyRegistered
-                ? $"Hotkey '{gesture.DisplayText}' is already registered by another application (Win32 error {err})."
-                : $"Failed to register hotkey '{gesture.DisplayText}' (Win32 error {err}).";
+                ? $"快捷键「{gesture.DisplayText}」已被其他程序占用 (Win32 error {err})。"
+                : $"注册快捷键「{gesture.DisplayText}」失败 (Win32 error {err})。";
 
             results[action] = new HotkeyRegistrationResult(action, Succeeded: false, ErrorMessage: errorMessage);
         }

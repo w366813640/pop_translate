@@ -34,6 +34,7 @@ public static class CoreServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<ITranslationProvider, DeepLTranslationProvider>());
         services.TryAddSingleton<ITranslationOrchestrator, TranslationOrchestrator>();
         services.TryAddSingleton<IBackTranslationService, BackTranslationService>();
+        services.TryAddSingleton<IModelDiscoveryService, OpenAiModelDiscoveryService>();
 
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IPolishProvider, OpenAiCompatiblePolishProvider>());
         services.TryAddSingleton<IPolishOrchestrator, PolishOrchestrator>();

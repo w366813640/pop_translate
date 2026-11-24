@@ -100,6 +100,72 @@
                             OffContent="关闭"
                             IsOn="{x:Bind ViewModel.AutoBackTranslate, Mode=TwoWay}" />
                     </Grid>
+
+                    <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="单词/短语智能词典模式" FontWeight="SemiBold" />
+                            <TextBlock
+                                Text="查询单个单词或短词组时，大模型自动输出音标、词性释义、词形变化与双语例句"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                TextWrapping="Wrap" />
+                        </StackPanel>
+                        <ToggleSwitch
+                            Grid.Column="1"
+                            OnContent="开启"
+                            OffContent="关闭"
+                            IsOn="{x:Bind ViewModel.EnableSingleWordDictionary, Mode=TwoWay}" />
+                    </Grid>
+
+                    <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="自动拆分代码驼峰/下划线变量名" FontWeight="SemiBold" />
+                            <TextBlock
+                                Text="自动将 camelCase、PascalCase、snake_case 等编程标识符拆分为可读词组后再翻译"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                TextWrapping="Wrap" />
+                        </StackPanel>
+                        <ToggleSwitch
+                            Grid.Column="1"
+                            OnContent="开启"
+                            OffContent="关闭"
+                            IsOn="{x:Bind ViewModel.EnableCodeIdentifierSplit, Mode=TwoWay}" />
+                    </Grid>
+
+                    <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+                    <StackPanel Spacing="8">
+                        <StackPanel Spacing="2">
+                            <TextBlock Text="自定义专业术语表 (Glossary)" FontWeight="SemiBold" />
+                            <TextBlock
+                                Text="每行填写一条「原文 = 译文」，当源文本命中对应术语时自动注入大模型提示词以保持译名一致"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                TextWrapping="Wrap" />
+                        </StackPanel>
+
+                        <TextBox
+                            AcceptsReturn="True"
+                            TextWrapping="Wrap"
+                            MinHeight="76"
+                            MaxHeight="156"
+                            ScrollViewer.VerticalScrollBarVisibility="Auto"
+                            PlaceholderText="例如（每行一条 原文 = 译文）：&#x0a;RAG = 检索增强生成&#x0a;Idempotent = 幂等"
+                            Text="{x:Bind ViewModel.GlossaryText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                    </StackPanel>
                 </StackPanel>
             </Border>
 

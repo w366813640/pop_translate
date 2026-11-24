@@ -22,9 +22,23 @@ public sealed class DualTargetLanguageRouter : ILanguageRouter
         var effectivePrimary = primaryTarget.IsAuto ? LanguageCode.ChineseSimplified : primaryTarget;
         var effectiveSecondary = secondaryTarget.IsAuto ? LanguageCode.English : secondaryTarget;
 
-        var detectedSource = requestedSource.IsAuto
-            ? _languageDetector.Detect(text ?? string.Empty).Language
-            : requestedSource;
+        if (effectiveSecondary == effectivePrimary)
+        {
+            effectiveSecondary = effectivePrimary.IsChinese
+                ? LanguageCode.English
+                : LanguageCode.ChineseSimplified;
+        }
+
+        LanguageCode detectedSource;
+        if (requestedSource.IsAuto)
+        {
+            var detection = _languageDetector.Detect(text ?? string.Empty);
+            detectedSource = detection.Language;
+        }
+        else
+        {
+            detectedSource = requestedSource;
+        }
 
         if (!requestedTarget.IsAuto)
         {

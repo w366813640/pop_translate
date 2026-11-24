@@ -13,22 +13,23 @@
 
 ## 核心特性
 
-- **极速划词取词与无侵入悬浮图标**
-  - 优先通过 Windows UI Automation (`IUIAutomation`) 无侵入读取选中文本，自动回退至防剪贴板污染的复制恢复机制。
-  - 支持全局快捷键划词翻译、鼠标划词自动弹出悬浮图标，以及进程黑名单与全屏免打扰守护。
-- **多引擎并行流式翻译**
-  - 内置免配置翻译引擎、DeepL（自动识别 Free / Pro）以及任意 OpenAI 兼容大语言模型（SSE 实时流式输出）。
-  - 支持双目标语言智能路由与 PDF/OCR 断行自动合并预处理。
-- **文本润色与双向回译校验**
-  - 支持通用、学术、商务、口语、精简与自定义 Prompt 等多种润色风格，多模型并行流式对比。
-  - 支持一键/自动流式回译与本地词级 Diff 高亮对比，直观核验修改细节。
-- **多显示器高 DPI 截图 OCR**
-  - 逐显示器冻结画面框选截图，完美适配混合 DPI 多屏环境。
-  - 默认支持 Windows 11 原生离线 OCR（`Windows.Media.Ocr`），同时支持切换 OpenAI 兼容视觉大模型 OCR。
-- **原生 Windows 11 质感与安全设计**
-  - 采用 WinUI 3 Fluent 2 设计语言，支持 Desktop Acrylic 翻译弹窗、Mica 设置窗口、浅色/深色主题跟随与系统托盘常驻。
-  - 所有 API 密钥均通过 Windows DPAPI（`DataProtectionScope.CurrentUser`）本地加密存储，配置文件永不写入明文密钥。
-  - 内置系统代理、直连、HTTP 及 SOCKS5 代理支持，以及标准自启与免 UAC 提权自启任务管理。
+- **极速无侵入划词与 `译 | 润` 双动作悬浮胶囊**
+  - 优先通过 Windows UI Automation (`IUIAutomation`) 零侵入读取选中文本，按需回退至防历史/云端污染的剪贴板快照恢复机制。
+  - 鼠标划词弹出无焦点抢占悬浮胶囊，悬停自动展开 `译 | 润` 双动作按钮，右键支持一键屏蔽当前应用或暂停划词 30 分钟；同时支持全局快捷键、可选按住 `Ctrl` 划词、全屏免打扰与双击 `Ctrl+C+C` 触发翻译。
+- **多引擎并行流式翻译、词典分流与代码拆词**
+  - 内置零配置免费翻译（Google 多节点 + Bing 自动故障转移）、DeepL（自动识别 Free / Pro 及配额检测）与任意 OpenAI 兼容大模型（SSE 实时流式输出，自动剥离推理模型 `<think>` 思维链）。
+  - 内置主流服务商一键预设（OpenAI、DeepSeek、Gemini、SiliconFlow、Ollama 本地免密钥、OpenRouter、通义千问、智谱 GLM）及 `/models` 可用模型列表自动拉取。
+  - 支持双目标语言智能路由、单词/短语词典模式自动分流（音标、词性释义、词形变化、双语例句）、开发者 `camelCase` / `snake_case` 标识符自动拆词、自定义术语表（Glossary）注入与 PDF/OCR 智能断行合并。
+- **AI 文本润色、一键回填替换与语音朗读**
+  - 支持通用流畅、学术正式、商务邮件、口语自然、精简凝练、代码命名（`CodeNaming` 四种命名规范生成）与自定义 Prompt 共 7 种润色风格，多模型并发流式对比。
+  - 支持**一键回填替换原文**（卡片「回填」按钮或 `Ctrl+Shift+Enter` 直接替换来源窗口选中文本）、一键/自动流式回译验证、本地词级 Myers Diff 高亮对比，以及原文/译文系统原生离线/自然语音 TTS 朗读。
+- **多显示器高 DPI 截图翻译与静默截图 OCR**
+  - 逐显示器高帧率冻结画面框选，完美适配混合 DPI 多屏环境；支持常规截图翻译（`Alt+S`）与**静默截图 OCR**（`Alt+Shift+S` 或截图时按住 `Ctrl` / `Ctrl+C` 直接识别文字写入剪贴板，不弹窗）。
+  - 默认内置 Windows 11 原生离线 OCR（`Windows.Media.Ocr` 零拷贝直通），并支持一键切换视觉大模型 OCR 的**纯文本 / Markdown 表格提取 / LaTeX 公式识别**三种专业模式（失败自动回退本地 OCR）及弹窗内缩略图重识别。
+- **原生 Windows 11 质感、便携模式与外部 CLI 联动**
+  - 采用 WinUI 3 Fluent 2 设计语言，支持 Desktop Acrylic 翻译弹窗、Mica 设置窗口、浅色/深色主题跟随与系统托盘常驻（含临时剪贴板监听开关）。
+  - 支持**便携模式（Portable Mode）**（在程序目录新建 `portable` 文件即可将配置与脱敏运行日志收敛至 `./data/`）与单实例命名管道 **CLI 参数调用**（无缝对接 Flow Launcher、PowerToys Run、Raycast、AutoHotkey 等工具）。
+  - 所有 API 密钥与代理密码均经由 Windows DPAPI（`DataProtectionScope.CurrentUser`）加密落盘；内置系统代理、直连、HTTP 及 SOCKS5 代理，以及标准 HKCU 自启与任务计划程序免 UAC 管理员提权自启。
 
 ---
 
@@ -39,11 +40,11 @@
 ```text
 PopTranslate.sln
 ├── src/
-│   ├── PopTranslate.Core/     # 纯 .NET 10 领域层：契约接口、数据模型、翻译/润色/OCR 编排、语言路由、本地 Diff、DPAPI 配置存储、代理工厂
-│   ├── PopTranslate.Win32/    # Windows 11 原生互操作层：CsWin32 全局热键、UIA 取词、防污染剪贴板、多屏截图覆盖层、Windows OCR、全屏守护与自启服务
-│   └── PopTranslate.App/      # WinUI 3 Unpackaged 桌面端：托盘常驻、Acrylic 翻译/润色弹窗、Mica 设置页、MVVM ViewModels
+│   ├── PopTranslate.Core/     # 纯 .NET 10 领域层：契约接口、数据模型、翻译/润色/词典/OCR 编排、模型发现、本地 Diff、DPAPI 配置与代理工厂
+│   ├── PopTranslate.Win32/    # Windows 11 原生互操作层：CsWin32 全局热键、UIA 取词、防污染剪贴板、原文回填、原生 TTS、多屏截图、Windows OCR 与提权自启
+│   └── PopTranslate.App/      # WinUI 3 Unpackaged 桌面端：单实例 CLI 管道、托盘常驻、双动作悬浮胶囊、Acrylic 翻译/润色弹窗、Mica 设置窗口
 └── tests/
-    └── PopTranslate.Tests/    # xUnit 单元测试、契约测试与端到端 DI 集成测试
+    └── PopTranslate.Tests/    # xUnit 单元测试、契约测试与端到端统一升级集成测试
 ```
 
 ---
@@ -83,14 +84,32 @@ dotnet test tests/PopTranslate.Tests/PopTranslate.Tests.csproj -p:Platform=x64
 dotnet build src/PopTranslate.App/PopTranslate.App.csproj -c Release -p:Platform=x64
 ```
 
-编译产物位于 `src/PopTranslate.App/bin/x64/Release/net10.0-windows10.0.26100.0/`，默认自包含 Windows App SDK 运行时。
+编译产物位于 `src/PopTranslate.App/bin/x64/Release/net10.0-windows10.0.26100.0/`，默认自包含 Windows App SDK 运行时与 ReadyToRun 预编译优化。
+
+---
+
+## 便携模式与 CLI 参数调用
+
+- **便携模式（Portable Mode）**：在 `PopTranslate.App.exe` 同级目录创建空文件 `portable`，配置与滚动脱敏日志将自动存储于 `./data/settings.json` 与 `./data/logs/app.log`。
+- **单实例 CLI 外部触发**：运行中再次通过命令行调用可执行文件时，参数将经由当前用户命名管道转发给常驻实例：
+
+```powershell
+PopTranslate.App.exe translate              # 触发当前选中文本翻译
+PopTranslate.App.exe translate "Hello"      # 直接弹出并翻译指定文本
+PopTranslate.App.exe polish "draft text"    # 直接以润色模式打开并润色指定文本
+PopTranslate.App.exe ocr                    # 触发截图翻译
+PopTranslate.App.exe silent-ocr             # 触发静默截图 OCR（直接写入剪贴板）
+PopTranslate.App.exe input                  # 打开输入翻译弹窗并聚焦输入框
+PopTranslate.App.exe settings Providers     # 打开设置窗口并跳转指定标签页
+PopTranslate.App.exe --minimized            # 静默启动并常驻系统托盘
+```
 
 ---
 
 ## 隐私与安全说明
 
-- 应用配置默认存储于 `%LOCALAPPDATA%\PopTranslate\settings.json`。
-- 用户配置的所有第三方 API 密钥在落盘前均通过 Windows DPAPI 绑定当前用户上下文加密，不会以明文形式保存在本地磁盘或任何日志中。
+- 应用配置默认存储于 `%LOCALAPPDATA%\PopTranslate\settings.json`（便携模式下为 `./data/settings.json`）。
+- 用户配置的所有第三方 API 密钥与代理密码在落盘前均通过 Windows DPAPI 绑定当前用户上下文加密，脱敏诊断日志绝不记录用户原文、译文或明文凭证。
 - 本项目不包含任何遥测或第三方数据收集逻辑；网络请求仅发往用户显式启用的翻译/OCR/大模型服务端点。
 
 ---

@@ -1,10 +1,11 @@
 using System.Collections.Frozen;
+using System.Text.RegularExpressions;
 using PopTranslate.Core.Contracts;
 using PopTranslate.Core.Models;
 
 namespace PopTranslate.Core.Language;
 
-public sealed class LocalLanguageDetector : ILanguageDetector
+public sealed partial class LocalLanguageDetector : ILanguageDetector
 {
     private static readonly FrozenSet<char> TraditionalExclusiveChars = new HashSet<char>(
         "這體學國為個來點會機時經與實說關開門動發譯簡語偵測驗證書畫電網軟統資檔視設選鍵盤螢圖貼顯隱權啟錯誤訊號處應從對進還過當樣問頭見長無現於將業種義氣產變戰場軍隊邊際環節構計館習練專領觀結標準規範雜難決執維護優調試確認檢記錄儲讀寫閉刪詢篩報評議饋驚險註帳碼郵聯溝協團價貢獻響趨預務稅約條聲願競運營滿創鏈輸銷廣傳覽講訓課績畢職麼們讓給沒裡歡樂買賣錢銀飛車馬鳥魚龍華漢萬億兩幾歲鐘離歸聽醫藥師勝敗總級終續斷絕絲線織紙紅綠藍風陽陰陸隨雙雞雖")
@@ -13,6 +14,21 @@ public sealed class LocalLanguageDetector : ILanguageDetector
     private static readonly FrozenSet<char> SimplifiedExclusiveChars = new HashSet<char>(
         "这体学国为个来点会机时经与实说关开门动发译简语侦测验证书画电网软统资档视设选键盘萤图贴显隐权启错误讯号处应从对进还过当样问头见长无现于将业种义气产变战场军队边际环节构计馆习练专领观结标准规范杂难决执维护优调试确认检记录储读写闭删询筛报评议馈惊险注帐码邮联沟协团价贡献响趋预务税约条声愿竞运营满创链输销广传览讲训课绩毕职么们让给没里欢乐买卖钱银飞车马鸟鱼龙华汉万亿两几岁钟离归听医药师胜败总级终续断绝丝线织纸红绿蓝风阳阴陆随双鸡虽")
         .ToFrozenSet();
+
+    private static readonly FrozenSet<char> JapaneseExclusiveChars = new HashSet<char>(
+        "々〆駅込働畑枠戻払訳読経続発円沢渋図観権様変実気楽対転伝広応価検証険験録錬鉄鉱銭収処拠択抜拡捜掲揺摂撃斎暁栄桜桟歓歩歯歴毎浄涙渇済満滝営焼犠猟獣畳県砕稲穂穏竜粋粛絵継総緑縁縄縦繊聴脳臓舗蔵薬蛍覚覧譲讃豊弐売専軽辺遅酔釈関闘陥雑霊頼顕駆騒髄髪黙斉齢峠辻匂凧凪雫躾樫栃笹糀鋲鰯鱈")
+        .ToFrozenSet();
+
+    private static readonly FrozenSet<char> ChineseOrdinalDeterminers = new HashSet<char>(
+        "第本往历歷上下首每一二三四五六七八九十百千万萬零0123456789")
+        .ToFrozenSet();
+
+    private static readonly string[] JapaneseKanjiCompounds =
+    [
+        "割引", "株式会社", "有限会社", "合同会社", "株式", "削除", "受付", "仕入",
+        "口座", "残高", "取引", "納期", "弁当", "日本語", "都道府県", "市町村",
+        "丁目", "届出", "申込", "税込", "税抜", "支払", "手続", "振込",
+    ];
 
     private static readonly FrozenSet<string> FrenchStopwords = new HashSet<string>(StringComparer.Ordinal)
     {
@@ -47,7 +63,7 @@ public sealed class LocalLanguageDetector : ILanguageDetector
         "uno", "sono", "questo", "questa", "questi", "queste", "ciao", "mondo", "anche", "come",
         "tutto", "tutti", "molto", "grazie", "traduzione", "essere", "nel", "nella", "nei", "nelle",
         "dalla", "dalle", "dal", "dai", "sul", "sulla", "tra", "fra", "dove", "quando", "perché",
-        "più", "può", "sempre", "bene", "qui", "ora", "ciao", "buongiorno",
+        "più", "può", "sempre", "bene", "qui", "ora", "buongiorno",
     }.ToFrozenSet(StringComparer.Ordinal);
 
     private static readonly FrozenSet<string> PortugueseStopwords = new HashSet<string>(StringComparer.Ordinal)
@@ -68,6 +84,31 @@ public sealed class LocalLanguageDetector : ILanguageDetector
         "they", "them", "been", "being", "does", "did", "some", "more", "very", "just", "only",
     }.ToFrozenSet(StringComparer.Ordinal);
 
+    private static readonly FrozenSet<string> StrongFrenchMarkers = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "bonjour", "merci", "traduction",
+    }.ToFrozenSet(StringComparer.Ordinal);
+
+    private static readonly FrozenSet<string> StrongGermanMarkers = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "hallo", "danke", "bitte", "übersetzung", "übersetzungstest",
+    }.ToFrozenSet(StringComparer.Ordinal);
+
+    private static readonly FrozenSet<string> StrongSpanishMarkers = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "hola", "gracias", "traducción", "buenos",
+    }.ToFrozenSet(StringComparer.Ordinal);
+
+    private static readonly FrozenSet<string> StrongItalianMarkers = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "ciao", "grazie", "buongiorno", "traduzione",
+    }.ToFrozenSet(StringComparer.Ordinal);
+
+    private static readonly FrozenSet<string> StrongPortugueseMarkers = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "olá", "obrigado", "obrigada", "tradução", "você", "vocês",
+    }.ToFrozenSet(StringComparer.Ordinal);
+
     public LanguageDetectionResult Detect(string text)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -75,29 +116,69 @@ public sealed class LocalLanguageDetector : ILanguageDetector
             return new LanguageDetectionResult(LanguageCode.Auto, 0.0, IsReliable: false);
         }
 
+        var stripped = StripNonProseArtifacts(text);
+        var result = DetectCore(stripped, forceUnreliable: false);
+        if (!result.Language.IsAuto)
+        {
+            return result;
+        }
+
+        if (!string.Equals(stripped, text, StringComparison.Ordinal))
+        {
+            return DetectCore(text, forceUnreliable: true);
+        }
+
+        return result;
+    }
+
+    internal static string StripNonProseArtifacts(string text)
+    {
+        var cleaned = UrlRegex().Replace(text, " ");
+        cleaned = EmailRegex().Replace(cleaned, " ");
+        cleaned = FilePathRegex().Replace(cleaned, " ");
+        return cleaned;
+    }
+
+    private static LanguageDetectionResult DetectCore(string text, bool forceUnreliable)
+    {
         int cjk = 0;
-        int kana = 0;
+        int hiragana = 0;
+        int katakana = 0;
         int hangul = 0;
         int cyrillic = 0;
         int arabic = 0;
         int latin = 0;
         int tradHits = 0;
         int simpHits = 0;
+        int jpHits = 0;
 
-        foreach (var ch in text)
+        for (var i = 0; i < text.Length; i++)
         {
-            if (IsHiragana(ch) || IsKatakana(ch))
+            var ch = text[i];
+            if (IsHiragana(ch))
             {
-                kana++;
+                hiragana++;
+            }
+            else if (IsKatakana(ch))
+            {
+                katakana++;
             }
             else if (IsHangul(ch))
             {
                 hangul++;
             }
-            else if (IsCjkIdeograph(ch))
+            else if (IsCjkIdeographOrIteration(ch))
             {
                 cjk++;
-                if (TraditionalExclusiveChars.Contains(ch))
+                if (JapaneseExclusiveChars.Contains(ch))
+                {
+                    jpHits++;
+                }
+                else if (ch == '届' && (i == 0 || !ChineseOrdinalDeterminers.Contains(text[i - 1])))
+                {
+                    jpHits++;
+                }
+                else if (TraditionalExclusiveChars.Contains(ch))
                 {
                     tradHits++;
                 }
@@ -120,56 +201,78 @@ public sealed class LocalLanguageDetector : ILanguageDetector
             }
         }
 
+        var kana = hiragana + katakana;
         var total = kana + hangul + cjk + cyrillic + arabic + latin;
         if (total == 0)
         {
             return new LanguageDetectionResult(LanguageCode.Auto, 0.0, IsReliable: false);
         }
 
+        if (cjk >= 2)
+        {
+            foreach (var compound in JapaneseKanjiCompounds)
+            {
+                if (text.Contains(compound, StringComparison.Ordinal))
+                {
+                    jpHits += 2;
+                }
+            }
+        }
+
         var kanaRatio = (double)kana / total;
-        if (kana >= 2 || (kana > 0 && kanaRatio > 0.08))
+        if (kana >= 2 ||
+            (kana > 0 && kanaRatio > 0.08) ||
+            (hiragana >= 1 && cjk >= 1 && simpHits <= jpHits + 2))
         {
             var japaneseRatio = (double)(kana + cjk) / total;
             var confidence = Math.Clamp(0.65 + (0.34 * japaneseRatio), 0.5, 0.99);
-            return new LanguageDetectionResult(LanguageCode.Japanese, confidence, IsReliable: true);
+            return new LanguageDetectionResult(LanguageCode.Japanese, confidence, IsReliable: !forceUnreliable);
         }
 
         var hangulRatio = (double)hangul / total;
         if (hangulRatio > 0.20)
         {
             var confidence = Math.Clamp(0.60 + (0.39 * hangulRatio), 0.5, 0.99);
-            return new LanguageDetectionResult(LanguageCode.Korean, confidence, IsReliable: true);
+            return new LanguageDetectionResult(LanguageCode.Korean, confidence, IsReliable: !forceUnreliable);
         }
 
         var cyrillicRatio = (double)cyrillic / total;
         if (cyrillicRatio > 0.30)
         {
             var confidence = Math.Clamp(0.60 + (0.39 * cyrillicRatio), 0.5, 0.99);
-            return new LanguageDetectionResult(LanguageCode.Russian, confidence, IsReliable: true);
+            return new LanguageDetectionResult(LanguageCode.Russian, confidence, IsReliable: !forceUnreliable);
         }
 
         var arabicRatio = (double)arabic / total;
         if (arabicRatio > 0.30)
         {
             var confidence = Math.Clamp(0.60 + (0.39 * arabicRatio), 0.5, 0.99);
-            return new LanguageDetectionResult(LanguageCode.Arabic, confidence, IsReliable: true);
+            return new LanguageDetectionResult(LanguageCode.Arabic, confidence, IsReliable: !forceUnreliable);
         }
 
         var cjkRatio = (double)cjk / total;
         if (cjkRatio > 0.15)
         {
+            if (jpHits >= 1 && jpHits * 12 >= cjk)
+            {
+                var jpConfidence = Math.Clamp(0.64 + (0.34 * cjkRatio), 0.55, 0.98);
+                var jpReliable = !forceUnreliable && (cjk >= 2 || cjkRatio >= 0.5);
+                return new LanguageDetectionResult(LanguageCode.Japanese, jpConfidence, jpReliable);
+            }
+
             var language = tradHits > simpHits && tradHits >= 1
                 ? LanguageCode.ChineseTraditional
                 : LanguageCode.ChineseSimplified;
 
             var confidence = Math.Clamp(0.60 + (0.38 * cjkRatio) + (tradHits != simpHits ? 0.01 : 0.0), 0.5, 0.99);
-            var isReliable = cjk >= 2 || cjkRatio >= 0.5;
+            var isReliable = !forceUnreliable && (cjk >= 2 || cjkRatio >= 0.5);
             return new LanguageDetectionResult(language, confidence, isReliable);
         }
 
         if (latin > 0)
         {
-            return DetectLatinLanguage(text, latin);
+            var latinResult = DetectLatinLanguage(text, latin);
+            return forceUnreliable ? latinResult with { IsReliable = false } : latinResult;
         }
 
         return new LanguageDetectionResult(LanguageCode.Auto, 0.0, IsReliable: false);
@@ -254,11 +357,11 @@ public sealed class LocalLanguageDetector : ILanguageDetector
         foreach (var word in EnumerateLatinWords(lower))
         {
             wordCount++;
-            if (FrenchStopwords.Contains(word)) fr += 1.2;
-            if (GermanStopwords.Contains(word)) de += 1.2;
-            if (SpanishStopwords.Contains(word)) es += 1.2;
-            if (ItalianStopwords.Contains(word)) it += 1.2;
-            if (PortugueseStopwords.Contains(word)) pt += 1.2;
+            if (FrenchStopwords.Contains(word)) fr += StrongFrenchMarkers.Contains(word) ? 2.2 : 1.2;
+            if (GermanStopwords.Contains(word)) de += StrongGermanMarkers.Contains(word) ? 2.2 : 1.2;
+            if (SpanishStopwords.Contains(word)) es += StrongSpanishMarkers.Contains(word) ? 2.2 : 1.2;
+            if (ItalianStopwords.Contains(word)) it += StrongItalianMarkers.Contains(word) ? 2.2 : 1.2;
+            if (PortugueseStopwords.Contains(word)) pt += StrongPortugueseMarkers.Contains(word) ? 2.2 : 1.2;
             if (EnglishStopwords.Contains(word)) en += 1.2;
         }
 
@@ -326,8 +429,13 @@ public sealed class LocalLanguageDetector : ILanguageDetector
     private static bool IsHangul(char ch) =>
         ch is (>= '\uAC00' and <= '\uD7AF') or (>= '\u1100' and <= '\u11FF') or (>= '\u3130' and <= '\u318F');
 
-    private static bool IsCjkIdeograph(char ch) =>
-        ch is (>= '\u4E00' and <= '\u9FFF') or (>= '\u3400' and <= '\u4DBF') or (>= '\uF900' and <= '\uFAFF');
+    private static bool IsCjkIdeographOrIteration(char ch) =>
+        ch is (>= '\u4E00' and <= '\u9FFF')
+            or (>= '\u3400' and <= '\u4DBF')
+            or (>= '\uF900' and <= '\uFAFF')
+            or '\u3005'
+            or '\u3006'
+            or '\u3007';
 
     private static bool IsCyrillic(char ch) =>
         ch is (>= '\u0400' and <= '\u04FF') or (>= '\u0500' and <= '\u052F');
@@ -341,4 +449,19 @@ public sealed class LocalLanguageDetector : ILanguageDetector
             or (>= '\u00C0' and <= '\u00D6')
             or (>= '\u00D8' and <= '\u00F6')
             or (>= '\u00F8' and <= '\u024F');
+
+    [GeneratedRegex(
+        @"(?:https?|ftp|file|ws|wss)://[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+|www\.[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex UrlRegex();
+
+    [GeneratedRegex(
+        @"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex EmailRegex();
+
+    [GeneratedRegex(
+        @"(?:[A-Za-z]:[\\/]|\\\\[A-Za-z0-9._\-]+[\\/])[A-Za-z0-9._\-\\/]+|(?<![A-Za-z0-9:])(?:\.{1,2}/|/)(?:[A-Za-z0-9._\-]+/)+[A-Za-z0-9._\-]*",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex FilePathRegex();
 }

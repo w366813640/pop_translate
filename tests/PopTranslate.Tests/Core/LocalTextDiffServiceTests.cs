@@ -97,10 +97,8 @@ public sealed class LocalTextDiffServiceTests
 
         AssertInvariants(original, revised, diff);
         Assert.Contains(diff, s => s.Operation == DiffOperation.Equal && s.Text.Contains("PopTranslate", StringComparison.Ordinal));
-        Assert.Contains(diff, s => s.Operation == DiffOperation.Delete && s.Text == "fast");
-        Assert.Contains(diff, s => s.Operation == DiffOperation.Insert && s.Text == "quickly");
-        Assert.Contains(diff, s => s.Operation == DiffOperation.Delete && s.Text == "translate");
-        Assert.Contains(diff, s => s.Operation == DiffOperation.Insert && s.Text == "polish");
+        Assert.Contains(diff, s => s.Operation == DiffOperation.Delete && s.Text == "fast translate");
+        Assert.Contains(diff, s => s.Operation == DiffOperation.Insert && s.Text == "quickly polish");
     }
 
     [Fact]
@@ -150,10 +148,13 @@ public sealed class LocalTextDiffServiceTests
                 .Where(s => s.Operation == DiffOperation.Equal)
                 .Sum(s => LocalTextDiffService.Tokenize(s.Text).Count);
 
-            // Coalescing may merge adjacent same-type tokens (e.g., two spaces from different operations),
-            // so actual equal token count is >= expectedLcs (and exact for distinct non-coalescing tokens).
-            Assert.True(actualEqualTokens >= expectedLcs,
-                $"Trial {trial}: expected at least {expectedLcs} equal tokens, got {actualEqualTokens}. Orig='{orig}', Rev='{rev}'");
+            // Coalescing may merge adjacent same-type tokens, while semantic chaff cleanup intentionally merges
+            // isolated 1-char CJK or single-space Equal islands sandwiched between Delete+Insert pairs.
+            var absorbedChaffAllowance = diff
+                .Where(s => s.Operation == DiffOperation.Delete)
+                .Sum(s => LocalTextDiffService.Tokenize(s.Text).Count(t => t == " " || (t.Length == 1 && t[0] >= '\u4E00')));
+            Assert.True(actualEqualTokens + absorbedChaffAllowance >= expectedLcs,
+                $"Trial {trial}: expected at least {expectedLcs} equal+chaff tokens, got {actualEqualTokens}+{absorbedChaffAllowance}. Orig='{orig}', Rev='{rev}'");
         }
     }
 

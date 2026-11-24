@@ -172,6 +172,35 @@
                         Message="{x:Bind ViewModel.PrivilegeFeedbackMessage, Mode=OneWay}" />
                 </StackPanel>
             </Border>
+
+            <!-- Diagnostics & Logs Card -->
+            <TextBlock Text="诊断与运行日志" Style="{StaticResource BodyStrongTextBlockStyle}" Margin="0,8,0,0" />
+            <Border Style="{StaticResource PopTranslateSettingsCardStyle}">
+                <Grid ColumnSpacing="16">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
+                        <TextBlock Text="本地运行诊断日志" FontWeight="SemiBold" />
+                        <TextBlock
+                            Text="查看本地脱敏诊断日志（绝不记录用户划词文本或 API Key），支持便携模式 ./data/logs 与标准模式目录"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            TextWrapping="Wrap" />
+                    </StackPanel>
+                    <Button
+                        Grid.Column="1"
+                        VerticalAlignment="Center"
+                        AutomationProperties.Name="打开运行日志目录"
+                        Command="{x:Bind ViewModel.OpenLogsDirectoryCommand}">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <FontIcon FontSize="13" Glyph="&#xE8B7;" />
+                            <TextBlock Text="打开运行日志目录" />
+                        </StackPanel>
+                    </Button>
+                </Grid>
+            </Border>
         </StackPanel>
     </ScrollViewer>
 </Page>

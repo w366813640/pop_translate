@@ -1,5 +1,18 @@
 namespace PopTranslate.Core.Models;
 
+public sealed class GlossaryEntry
+{
+    public string SourceTerm { get; set; } = string.Empty;
+
+    public string TargetTerm { get; set; } = string.Empty;
+
+    public GlossaryEntry Clone() => new()
+    {
+        SourceTerm = SourceTerm ?? string.Empty,
+        TargetTerm = TargetTerm ?? string.Empty,
+    };
+}
+
 public sealed class AppSettings
 {
     public const int CurrentSchemaVersion = 1;
@@ -11,6 +24,10 @@ public sealed class AppSettings
     public LanguageCode SecondaryTargetLanguage { get; set; } = LanguageCode.English;
 
     public bool MergePdfLineBreaks { get; set; } = true;
+
+    public bool EnableSingleWordDictionary { get; set; } = true;
+
+    public bool EnableCodeIdentifierSplit { get; set; } = true;
 
     public bool AutoBackTranslate { get; set; }
 
@@ -32,12 +49,16 @@ public sealed class AppSettings
 
     public List<ProviderInstanceConfig> Providers { get; set; } = [];
 
+    public List<GlossaryEntry> Glossary { get; set; } = [];
+
     public static AppSettings CreateDefault() => new()
     {
         SchemaVersion = CurrentSchemaVersion,
         PrimaryTargetLanguage = LanguageCode.ChineseSimplified,
         SecondaryTargetLanguage = LanguageCode.English,
         MergePdfLineBreaks = true,
+        EnableSingleWordDictionary = true,
+        EnableCodeIdentifierSplit = true,
         AutoBackTranslate = false,
         LaunchAtStartup = false,
         UseElevatedStartupTask = false,
@@ -47,6 +68,7 @@ public sealed class AppSettings
         Proxy = new ProxyConfig(),
         Window = new WindowBehaviorConfig(),
         Polish = new PolishConfig(),
+        Glossary = [],
         Providers =
         [
             new ProviderInstanceConfig
@@ -90,6 +112,8 @@ public sealed class AppSettings
         PrimaryTargetLanguage = PrimaryTargetLanguage,
         SecondaryTargetLanguage = SecondaryTargetLanguage,
         MergePdfLineBreaks = MergePdfLineBreaks,
+        EnableSingleWordDictionary = EnableSingleWordDictionary,
+        EnableCodeIdentifierSplit = EnableCodeIdentifierSplit,
         AutoBackTranslate = AutoBackTranslate,
         LaunchAtStartup = LaunchAtStartup,
         UseElevatedStartupTask = UseElevatedStartupTask,
@@ -99,6 +123,7 @@ public sealed class AppSettings
         Proxy = (Proxy ?? new ProxyConfig()).Clone(),
         Window = (Window ?? new WindowBehaviorConfig()).Clone(),
         Polish = (Polish ?? new PolishConfig()).Clone(),
-        Providers = (Providers ?? []).Select(p => p.Clone()).ToList(),
+        Providers = (Providers ?? []).Where(p => p is not null).Select(p => p.Clone()).ToList(),
+        Glossary = (Glossary ?? []).Where(g => g is not null).Select(g => g.Clone()).ToList(),
     };
 }

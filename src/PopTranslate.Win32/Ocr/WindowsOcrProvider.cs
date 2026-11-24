@@ -42,7 +42,10 @@ public sealed class WindowsOcrProvider : IOcrProvider
 
         var sw = Stopwatch.StartNew();
 
-        if (image.ImageBytes is null || image.ImageBytes.Length == 0)
+        var hasRawBgra = image.RawBgraBytes is { Length: > 0 } && image.PixelWidth > 0 && image.PixelHeight > 0;
+        var hasEncodedBytes = image.ImageBytes is { Length: > 0 };
+
+        if (!hasRawBgra && !hasEncodedBytes)
         {
             return new CoreOcrResult(
                 IsSuccess: false,
@@ -170,13 +173,23 @@ public sealed class WindowsOcrProvider : IOcrProvider
         for (var i = 0; i < trimmed.Length; i++)
         {
             var current = trimmed[i];
-            if (current == ' ' && sb.Length > 0 && i + 1 < trimmed.Length)
+            if (current == ' ')
             {
-                var prev = sb[^1];
-                var next = trimmed[i + 1];
-                if (IsCjkNoSpaceChar(prev) && IsCjkNoSpaceChar(next))
+                var runEnd = i + 1;
+                while (runEnd < trimmed.Length && trimmed[runEnd] == ' ')
                 {
-                    continue;
+                    runEnd++;
+                }
+
+                if (sb.Length > 0 && runEnd < trimmed.Length)
+                {
+                    var prev = sb[^1];
+                    var next = trimmed[runEnd];
+                    if (IsCjkNoSpaceChar(prev) && IsCjkNoSpaceChar(next))
+                    {
+                        i = runEnd - 1;
+                        continue;
+                    }
                 }
             }
 
@@ -258,8 +271,44 @@ public sealed class WindowsOcrProvider : IOcrProvider
             }
         }
 
-        // 3. Windows user profile default
+        // 3. Auto mode: check user profile language first; if non-CJK (e.g. en-US Windows UI),
+        // prefer an installed zh-Hans / zh-Hant / ja recognizer since Windows CJK OCR models
+        // natively recognize both CJK and Latin scripts accurately!
         var profileEngine = OcrEngine.TryCreateFromUserProfileLanguages();
+        if (profileEngine is not null && IsCjkRecognizerLanguage(profileEngine.RecognizerLanguage.LanguageTag))
+        {
+            return profileEngine;
+        }
+
+        LanguageCode[] smartCjkFallbacks =
+        [
+            LanguageCode.ChineseSimplified,
+            LanguageCode.ChineseTraditional,
+            LanguageCode.Japanese,
+        ];
+
+        foreach (var targetCjk in smartCjkFallbacks)
+        {
+            Language? cjkLang = null;
+            foreach (var candidate in available)
+            {
+                if (LanguageCode.FromBcp47(candidate.LanguageTag) == targetCjk)
+                {
+                    cjkLang = candidate;
+                    break;
+                }
+            }
+
+            if (cjkLang is not null)
+            {
+                var cjkEngine = OcrEngine.TryCreateFromLanguage(cjkLang);
+                if (cjkEngine is not null)
+                {
+                    return cjkEngine;
+                }
+            }
+        }
+
         if (profileEngine is not null)
         {
             return profileEngine;
@@ -282,6 +331,27 @@ public sealed class WindowsOcrProvider : IOcrProvider
         OcrImage image,
         CancellationToken cancellationToken)
     {
+        var maxDim = (int)OcrEngine.MaxImageDimension;
+
+        // Fast direct BGRA32 path when CapturedScreenshot supplies RawBgraBytes (zero PNG decode overhead).
+        if (image.RawBgraBytes is { Length: > 0 } rawBgra &&
+            image.PixelWidth > 0 &&
+            image.PixelHeight > 0 &&
+            image.PixelWidth <= maxDim &&
+            image.PixelHeight <= maxDim)
+        {
+            var expectedRawBytes = checked(image.PixelWidth * image.PixelHeight * 4);
+            if (rawBgra.Length >= expectedRawBytes)
+            {
+                return SoftwareBitmap.CreateCopyFromBuffer(
+                    rawBgra.AsBuffer(0, expectedRawBytes),
+                    BitmapPixelFormat.Bgra8,
+                    image.PixelWidth,
+                    image.PixelHeight,
+                    BitmapAlphaMode.Premultiplied);
+            }
+        }
+
         if (IsRawBgra32MimeType(image.MimeType))
         {
             if (image.PixelWidth <= 0 || image.PixelHeight <= 0)
@@ -314,11 +384,11 @@ public sealed class WindowsOcrProvider : IOcrProvider
         stream.Seek(0);
         var decoder = await BitmapDecoder.CreateAsync(stream).AsTask(cancellationToken).ConfigureAwait(false);
 
-        var maxDim = OcrEngine.MaxImageDimension;
+        var maxDimUint = OcrEngine.MaxImageDimension;
         var srcWidth = decoder.PixelWidth;
         var srcHeight = decoder.PixelHeight;
 
-        if (srcWidth <= maxDim && srcHeight <= maxDim)
+        if (srcWidth <= maxDimUint && srcHeight <= maxDimUint)
         {
             return await decoder
                 .GetSoftwareBitmapAsync(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied)
@@ -326,7 +396,7 @@ public sealed class WindowsOcrProvider : IOcrProvider
                 .ConfigureAwait(false);
         }
 
-        var scale = Math.Min((double)maxDim / srcWidth, (double)maxDim / srcHeight);
+        var scale = Math.Min((double)maxDimUint / srcWidth, (double)maxDimUint / srcHeight);
         var transform = new BitmapTransform
         {
             ScaledWidth = Math.Max(1u, (uint)Math.Floor(srcWidth * scale)),
@@ -352,16 +422,25 @@ public sealed class WindowsOcrProvider : IOcrProvider
             BitmapAlphaMode.Premultiplied);
     }
 
+    private static bool IsCjkRecognizerLanguage(string? languageTag)
+    {
+        var mapped = LanguageCode.FromBcp47(languageTag);
+        return mapped.IsChinese || mapped == LanguageCode.Japanese || mapped == LanguageCode.Korean;
+    }
+
     private static bool IsRawBgra32MimeType(string? mimeType) =>
         string.Equals(mimeType, "raw/bgra32", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(mimeType, "image/x-bgra32", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(mimeType, "bgra32", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsCjkNoSpaceChar(char c) =>
-        (c >= '\u4E00' && c <= '\u9FFF') || // CJK Unified Ideographs
-        (c >= '\u3400' && c <= '\u4DBF') || // CJK Unified Ideographs Extension A
-        (c >= '\u3040' && c <= '\u309F') || // Hiragana
-        (c >= '\u30A0' && c <= '\u30FF') || // Katakana
-        (c >= '\u3000' && c <= '\u303F') || // CJK Symbols and Punctuation
-        (c >= '\uFF00' && c <= '\uFFEF');   // Fullwidth Forms
+        c == '\u00B7' ||                      // Middle dot (·)
+        (c >= '\u2000' && c <= '\u206F') ||   // General Punctuation (“ ” ‘ ’ — …)
+        (c >= '\u3000' && c <= '\u303F') ||   // CJK Symbols and Punctuation
+        (c >= '\u3040' && c <= '\u309F') ||   // Hiragana
+        (c >= '\u30A0' && c <= '\u30FF') ||   // Katakana
+        (c >= '\u3400' && c <= '\u4DBF') ||   // CJK Unified Ideographs Extension A
+        (c >= '\u4E00' && c <= '\u9FFF') ||   // CJK Unified Ideographs
+        (c >= '\uF900' && c <= '\uFAFF') ||   // CJK Compatibility Ideographs
+        (c >= '\uFF00' && c <= '\uFFEF');     // Fullwidth Forms
 }

@@ -17,16 +17,21 @@ public sealed partial class OcrSettingsViewModel : ObservableObject
     private readonly ISettingsStore _settingsStore;
     private readonly ISecretProtector _secretProtector;
     private readonly IOcrOrchestrator _ocrOrchestrator;
+    private readonly IModelDiscoveryService _modelDiscoveryService;
     private bool _isLoading;
+    private bool _isDirty;
+    private bool _suppressDiscoveredModelSync;
 
     public OcrSettingsViewModel(
         ISettingsStore settingsStore,
         ISecretProtector secretProtector,
-        IOcrOrchestrator ocrOrchestrator)
+        IOcrOrchestrator ocrOrchestrator,
+        IModelDiscoveryService modelDiscoveryService)
     {
         _settingsStore = settingsStore;
         _secretProtector = secretProtector;
         _ocrOrchestrator = ocrOrchestrator;
+        _modelDiscoveryService = modelDiscoveryService;
 
         PreferredLanguageOptions.Add(new OcrLanguageOption(string.Empty, "自动（跟随 Windows 用户语言）"));
         SelectedPreferredLanguage = PreferredLanguageOptions[0];
@@ -36,10 +41,15 @@ public sealed partial class OcrSettingsViewModel : ObservableObject
 
     public ObservableCollection<OcrLanguageOption> PreferredLanguageOptions { get; } = [];
 
+    public ObservableCollection<string> DiscoveredModels { get; } = [];
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsWindowsNativeSelected))]
     [NotifyPropertyChangedFor(nameof(IsVisionLlmSelected))]
     public partial int ActiveProviderIndex { get; set; }
+
+    [ObservableProperty]
+    public partial int PromptModeIndex { get; set; }
 
     [ObservableProperty]
     public partial OcrLanguageOption SelectedPreferredLanguage { get; set; }
@@ -52,6 +62,9 @@ public sealed partial class OcrSettingsViewModel : ObservableObject
 
     [ObservableProperty]
     public partial string VisionModel { get; set; } = "gpt-4o-mini";
+
+    [ObservableProperty]
+    public partial string? SelectedDiscoveredModel { get; set; }
 
     [ObservableProperty]
     public partial string VisionApiKeyPlaintext { get; set; } = string.Empty;
@@ -73,6 +86,10 @@ public sealed partial class OcrSettingsViewModel : ObservableObject
     public partial bool IsTestingOcr { get; set; }
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanFetchModels))]
+    public partial bool IsFetchingModels { get; set; }
+
+    [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasFeedback))]
     public partial string? FeedbackMessage { get; set; }
 
@@ -83,6 +100,10 @@ public sealed partial class OcrSettingsViewModel : ObservableObject
     public bool IsWindowsNativeSelected => ActiveProviderIndex == (int)OcrProviderKind.WindowsNative;
 
     public bool IsVisionLlmSelected => ActiveProviderIndex == (int)OcrProviderKind.VisionLlm;
+
+    public bool CanFetchModels => !IsFetchingModels;
+
+    public bool HasDiscoveredModels => DiscoveredModels.Count > 0;
 
     public bool ShowMissingLanguagePacksWarning => !HasInstalledLanguagePacks && !IsRefreshingLanguages;
 
@@ -96,6 +117,7 @@ public sealed partial class OcrSettingsViewModel : ObservableObject
         try
         {
             ActiveProviderIndex = (int)settings.Ocr.ActiveProvider;
+            PromptModeIndex = (int)settings.Ocr.PromptMode;
             AutoMergeOcrLineBreaks = settings.Ocr.AutoMergeOcrLineBreaks;
             VisionBaseUrl = settings.Ocr.VisionBaseUrl;
             VisionModel = settings.Ocr.VisionModel;
@@ -111,6 +133,8 @@ public sealed partial class OcrSettingsViewModel : ObservableObject
                 VisionApiKeyPlaintext = decrypted;
             }
 
+            ClearDiscoveredModels();
+            _isDirty = false;
             FeedbackMessage = null;
             IsFeedbackError = false;
         }
@@ -122,25 +146,141 @@ public sealed partial class OcrSettingsViewModel : ObservableObject
         await RefreshWindowsLanguagesAsync(settings.Ocr.PreferredWindowsOcrLanguageTag);
     }
 
+    public async Task FlushIfDirtyAsync()
+    {
+        if (!_isDirty || _isLoading)
+        {
+            return;
+        }
+
+        await SaveOcrSettingsCoreAsync(successMessage: null);
+    }
+
     [RelayCommand]
     private Task RefreshLanguagesAsync() =>
         RefreshWindowsLanguagesAsync(_settingsStore.Current.Ocr.PreferredWindowsOcrLanguageTag);
 
     [RelayCommand]
-    private async Task SaveOcrSettingsAsync()
+    private Task SaveOcrSettingsAsync() =>
+        SaveOcrSettingsCoreAsync("OCR 配置已安全保存并实时生效。");
+
+    [RelayCommand]
+    private async Task ReuseFirstLlmCredentialsAsync()
     {
+        var providers = _settingsStore.Current.Providers ?? [];
+        var candidate = providers
+            .OrderBy(p => p.SortOrder)
+            .FirstOrDefault(p => p.Kind == ProviderKind.OpenAiCompatible && !string.IsNullOrWhiteSpace(p.EncryptedApiKey))
+            ?? providers
+                .OrderBy(p => p.SortOrder)
+                .FirstOrDefault(p => p.Kind == ProviderKind.OpenAiCompatible && p.Enabled && !string.IsNullOrWhiteSpace(p.BaseUrl))
+            ?? providers
+                .OrderBy(p => p.SortOrder)
+                .FirstOrDefault(p => p.Kind == ProviderKind.OpenAiCompatible && !string.IsNullOrWhiteSpace(p.BaseUrl));
+
+        if (candidate is null)
+        {
+            IsFeedbackError = true;
+            FeedbackMessage = "未找到已配置的 OpenAI 兼容大模型实例，请先前往「翻译服务」页添加并配置。";
+            return;
+        }
+
+        var decryptedKey = string.Empty;
+        if (!string.IsNullOrWhiteSpace(candidate.EncryptedApiKey) &&
+            _secretProtector.TryUnprotect(candidate.EncryptedApiKey, out var plain))
+        {
+            decryptedKey = plain;
+        }
+
+        _isLoading = true;
         try
         {
-            var updated = _settingsStore.Current.Clone();
-            updated.Ocr = BuildCurrentConfig();
-            await _settingsStore.SaveAsync(updated);
+            VisionBaseUrl = candidate.BaseUrl;
+            if (!string.IsNullOrWhiteSpace(candidate.Model))
+            {
+                VisionModel = candidate.Model;
+            }
+
+            VisionApiKeyPlaintext = decryptedKey;
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+
+        ClearDiscoveredModels();
+        await SaveOcrSettingsCoreAsync($"已复用「{candidate.DisplayName}」的接口地址与凭证并保存。");
+    }
+
+    [RelayCommand]
+    private async Task FetchModelsAsync()
+    {
+        if (IsFetchingModels)
+        {
+            return;
+        }
+
+        var baseUrl = VisionBaseUrl?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(baseUrl))
+        {
+            IsFeedbackError = true;
+            FeedbackMessage = "请先填写 Vision API Base URL 后再拉取模型列表。";
+            return;
+        }
+
+        IsFetchingModels = true;
+        IsFeedbackError = false;
+        FeedbackMessage = "正在从当前接口拉取可用模型列表...";
+
+        try
+        {
+            var models = await _modelDiscoveryService.FetchModelsAsync(baseUrl, VisionApiKeyPlaintext);
+            _suppressDiscoveredModelSync = true;
+            try
+            {
+                DiscoveredModels.Clear();
+                foreach (var model in models)
+                {
+                    if (!string.IsNullOrWhiteSpace(model))
+                    {
+                        DiscoveredModels.Add(model);
+                    }
+                }
+
+                OnPropertyChanged(nameof(HasDiscoveredModels));
+
+                if (DiscoveredModels.Count == 0)
+                {
+                    SelectedDiscoveredModel = null;
+                    IsFeedbackError = true;
+                    FeedbackMessage = "服务端未返回可用模型列表，请手动填写视觉模型名称。";
+                    return;
+                }
+
+                if (string.IsNullOrWhiteSpace(VisionModel))
+                {
+                    VisionModel = DiscoveredModels[0];
+                }
+
+                SelectedDiscoveredModel = DiscoveredModels.FirstOrDefault(
+                    m => string.Equals(m, VisionModel, StringComparison.Ordinal));
+            }
+            finally
+            {
+                _suppressDiscoveredModelSync = false;
+            }
+
             IsFeedbackError = false;
-            FeedbackMessage = "OCR 配置已安全保存并实时生效。";
+            FeedbackMessage = $"成功拉取 {DiscoveredModels.Count} 个模型，可在下拉框中选择支持多模态视觉的模型。";
         }
         catch (Exception ex)
         {
             IsFeedbackError = true;
-            FeedbackMessage = $"保存 OCR 配置失败：{ex.Message}";
+            FeedbackMessage = $"拉取模型列表失败：{ex.Message}";
+        }
+        finally
+        {
+            IsFetchingModels = false;
         }
     }
 
@@ -151,6 +291,9 @@ public sealed partial class OcrSettingsViewModel : ObservableObject
         {
             return;
         }
+
+        // Always persist current OCR edits before running test so a passing check never leaves edits unsaved.
+        await SaveOcrSettingsCoreAsync(successMessage: null);
 
         IsTestingOcr = true;
         IsFeedbackError = false;
@@ -190,6 +333,14 @@ public sealed partial class OcrSettingsViewModel : ObservableObject
         }
     }
 
+    partial void OnPromptModeIndexChanged(int value)
+    {
+        if (!_isLoading)
+        {
+            _ = SaveOcrSettingsAsync();
+        }
+    }
+
     partial void OnAutoMergeOcrLineBreaksChanged(bool value)
     {
         if (!_isLoading)
@@ -203,6 +354,86 @@ public sealed partial class OcrSettingsViewModel : ObservableObject
         if (!_isLoading && value is not null)
         {
             _ = SaveOcrSettingsAsync();
+        }
+    }
+
+    partial void OnSelectedDiscoveredModelChanged(string? value)
+    {
+        if (_suppressDiscoveredModelSync || _isLoading || string.IsNullOrWhiteSpace(value))
+        {
+            return;
+        }
+
+        VisionModel = value;
+    }
+
+    partial void OnVisionBaseUrlChanged(string value) => MarkDirtyIfReady();
+
+    partial void OnVisionModelChanged(string value)
+    {
+        MarkDirtyIfReady();
+        if (!_suppressDiscoveredModelSync && DiscoveredModels.Count > 0)
+        {
+            _suppressDiscoveredModelSync = true;
+            try
+            {
+                SelectedDiscoveredModel = DiscoveredModels.FirstOrDefault(
+                    m => string.Equals(m, value, StringComparison.Ordinal));
+            }
+            finally
+            {
+                _suppressDiscoveredModelSync = false;
+            }
+        }
+    }
+
+    partial void OnVisionApiKeyPlaintextChanged(string value) => MarkDirtyIfReady();
+
+    partial void OnVisionPromptChanged(string value) => MarkDirtyIfReady();
+
+    partial void OnTimeoutSecondsChanged(double value) => MarkDirtyIfReady();
+
+    private void MarkDirtyIfReady()
+    {
+        if (!_isLoading)
+        {
+            _isDirty = true;
+        }
+    }
+
+    private void ClearDiscoveredModels()
+    {
+        _suppressDiscoveredModelSync = true;
+        try
+        {
+            DiscoveredModels.Clear();
+            SelectedDiscoveredModel = null;
+            OnPropertyChanged(nameof(HasDiscoveredModels));
+        }
+        finally
+        {
+            _suppressDiscoveredModelSync = false;
+        }
+    }
+
+    private async Task SaveOcrSettingsCoreAsync(string? successMessage)
+    {
+        try
+        {
+            var updated = _settingsStore.Current.Clone();
+            updated.Ocr = BuildCurrentConfig();
+            await _settingsStore.SaveAsync(updated);
+            _isDirty = false;
+            if (!string.IsNullOrWhiteSpace(successMessage))
+            {
+                IsFeedbackError = false;
+                FeedbackMessage = successMessage;
+            }
+        }
+        catch (Exception ex)
+        {
+            IsFeedbackError = true;
+            FeedbackMessage = $"保存 OCR 配置失败：{ex.Message}";
         }
     }
 
@@ -255,6 +486,12 @@ public sealed partial class OcrSettingsViewModel : ObservableObject
         ActiveProvider = ActiveProviderIndex == (int)OcrProviderKind.VisionLlm
             ? OcrProviderKind.VisionLlm
             : OcrProviderKind.WindowsNative,
+        PromptMode = PromptModeIndex switch
+        {
+            (int)OcrPromptMode.MarkdownTable => OcrPromptMode.MarkdownTable,
+            (int)OcrPromptMode.LatexFormula => OcrPromptMode.LatexFormula,
+            _ => OcrPromptMode.PlainText,
+        },
         PreferredWindowsOcrLanguageTag = SelectedPreferredLanguage?.LanguageTag ?? string.Empty,
         AutoMergeOcrLineBreaks = AutoMergeOcrLineBreaks,
         VisionBaseUrl = VisionBaseUrl?.Trim() ?? string.Empty,

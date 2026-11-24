@@ -33,16 +33,47 @@ public static class PolishPromptTemplates
         "eliminating redundancy and filler while keeping every key fact intact. " +
         SharedStrictRules;
 
+    private const string CodeNamingPrompt =
+        "You are a senior software engineer specializing in clean, idiomatic code naming. " +
+        "Generate concise English identifier candidates for the concept or identifier provided in these four conventions:\n" +
+        "- camelCase: <identifier> — <1-line note>\n" +
+        "- PascalCase: <identifier> — <1-line note>\n" +
+        "- snake_case: <identifier> — <1-line note>\n" +
+        "- SCREAMING_SNAKE_CASE: <identifier> — <1-line note>\n" +
+        "Output ONLY the four candidate lines without preface or markdown code fences.";
+
     public static string ResolveSystemPrompt(
         PolishStyle style,
         string? customPrompt,
         LanguageCode? preferredLanguage = null)
     {
+        if (style == PolishStyle.CodeNaming)
+        {
+            if (preferredLanguage is { IsAuto: false } noteLang)
+            {
+                return $"{CodeNamingPrompt} Keep all identifiers in idiomatic ASCII English and write the brief 1-line notes in {noteLang.DisplayName}.";
+            }
+
+            return CodeNamingPrompt;
+        }
+
         if (style == PolishStyle.Custom)
         {
-            return string.IsNullOrWhiteSpace(customPrompt)
+            var resolvedCustom = string.IsNullOrWhiteSpace(customPrompt)
                 ? PolishConfig.DefaultCustomPrompt
                 : customPrompt.Trim();
+
+            if (preferredLanguage is { IsAuto: false } customLang)
+            {
+                return $"{resolvedCustom} Keep the output strictly in {customLang.DisplayName} (do NOT translate into another language).";
+            }
+
+            if (!resolvedCustom.Contains("original language", StringComparison.OrdinalIgnoreCase))
+            {
+                return $"{resolvedCustom} Keep the output strictly in the original language of the source text (do NOT translate it).";
+            }
+
+            return resolvedCustom;
         }
 
         var basePrompt = style switch

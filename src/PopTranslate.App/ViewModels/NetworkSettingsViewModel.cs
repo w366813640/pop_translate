@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using PopTranslate.Core.Contracts;
 using PopTranslate.Core.Models;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -12,6 +13,7 @@ public sealed partial class NetworkSettingsViewModel : ObservableObject
     private readonly ISecretProtector _secretProtector;
     private readonly IStartupPrivilegeService _startupPrivilegeService;
     private bool _isLoading;
+    private bool _isDirty;
 
     public NetworkSettingsViewModel(
         ISettingsStore settingsStore,
@@ -24,6 +26,8 @@ public sealed partial class NetworkSettingsViewModel : ObservableObject
     }
 
     public event EventHandler? RestartAsAdministratorRequested;
+
+    public event EventHandler<bool>? ElevatedStartupToggled;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsCustomProxyMode))]
@@ -119,6 +123,7 @@ public sealed partial class NetworkSettingsViewModel : ObservableObject
             }
 
             IsElevatedStartupTaskEnabled = settings.UseElevatedStartupTask;
+            _isDirty = false;
             ProxyFeedbackMessage = null;
             IsProxyFeedbackError = false;
             PrivilegeFeedbackMessage = null;
@@ -151,8 +156,105 @@ public sealed partial class NetworkSettingsViewModel : ObservableObject
         }
     }
 
+    public void SyncElevatedStartupFromExternal(bool enabled)
+    {
+        _isLoading = true;
+        try
+        {
+            IsElevatedStartupTaskEnabled = enabled;
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    public async Task FlushIfDirtyAsync()
+    {
+        if (!_isDirty || _isLoading)
+        {
+            return;
+        }
+
+        await SaveProxySettingsCoreAsync(successMessage: null);
+    }
+
     [RelayCommand]
-    private async Task SaveProxySettingsAsync()
+    private Task SaveProxySettingsAsync() =>
+        SaveProxySettingsCoreAsync("网络代理配置已保存并立即生效。");
+
+    [RelayCommand]
+    private void RestartAsAdministrator()
+    {
+        RestartAsAdministratorRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    [RelayCommand]
+    private void OpenLogsDirectory()
+    {
+        try
+        {
+            var baseDir = AppContext.BaseDirectory;
+            var logsDir = File.Exists(Path.Combine(baseDir, "portable"))
+                ? Path.Combine(baseDir, "data", "logs")
+                : Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "PopTranslate",
+                    "logs");
+
+            Directory.CreateDirectory(logsDir);
+            using var _ = Process.Start("explorer.exe", $"\"{logsDir}\"");
+        }
+        catch (Exception ex)
+        {
+            IsPrivilegeFeedbackError = true;
+            PrivilegeFeedbackMessage = $"打开运行日志目录失败：{ex.Message}";
+        }
+    }
+
+    partial void OnProxyModeIndexChanged(int value)
+    {
+        if (!_isLoading)
+        {
+            _ = SaveProxySettingsAsync();
+        }
+    }
+
+    partial void OnHostChanged(string value) => MarkDirtyIfReady();
+
+    partial void OnPortChanged(double value) => MarkDirtyIfReady();
+
+    partial void OnUsernameChanged(string value) => MarkDirtyIfReady();
+
+    partial void OnPasswordPlaintextChanged(string value) => MarkDirtyIfReady();
+
+    partial void OnBypassLocalAddressesChanged(bool value)
+    {
+        if (!_isLoading)
+        {
+            _ = SaveProxySettingsCoreAsync(successMessage: null);
+        }
+    }
+
+    partial void OnIsElevatedStartupTaskEnabledChanged(bool value)
+    {
+        if (_isLoading || IsUpdatingElevatedTask)
+        {
+            return;
+        }
+
+        _ = ApplyElevatedStartupTaskAsync(value);
+    }
+
+    private void MarkDirtyIfReady()
+    {
+        if (!_isLoading)
+        {
+            _isDirty = true;
+        }
+    }
+
+    private async Task SaveProxySettingsCoreAsync(string? successMessage)
     {
         try
         {
@@ -173,38 +275,18 @@ public sealed partial class NetworkSettingsViewModel : ObservableObject
             updated.Proxy.BypassLocalAddresses = BypassLocalAddresses;
 
             await _settingsStore.SaveAsync(updated);
-            IsProxyFeedbackError = false;
-            ProxyFeedbackMessage = "网络代理配置已保存并立即生效。";
+            _isDirty = false;
+            if (!string.IsNullOrWhiteSpace(successMessage))
+            {
+                IsProxyFeedbackError = false;
+                ProxyFeedbackMessage = successMessage;
+            }
         }
         catch (Exception ex)
         {
             IsProxyFeedbackError = true;
             ProxyFeedbackMessage = $"保存代理配置失败：{ex.Message}";
         }
-    }
-
-    [RelayCommand]
-    private void RestartAsAdministrator()
-    {
-        RestartAsAdministratorRequested?.Invoke(this, EventArgs.Empty);
-    }
-
-    partial void OnProxyModeIndexChanged(int value)
-    {
-        if (!_isLoading && value is (int)ProxyMode.System or (int)ProxyMode.Direct)
-        {
-            _ = SaveProxySettingsAsync();
-        }
-    }
-
-    partial void OnIsElevatedStartupTaskEnabledChanged(bool value)
-    {
-        if (_isLoading || IsUpdatingElevatedTask)
-        {
-            return;
-        }
-
-        _ = ApplyElevatedStartupTaskAsync(value);
     }
 
     private async Task ApplyElevatedStartupTaskAsync(bool enabled)
@@ -235,13 +317,31 @@ public sealed partial class NetworkSettingsViewModel : ObservableObject
                 return;
             }
 
+            if (enabled && !string.IsNullOrWhiteSpace(exePath))
+            {
+                try
+                {
+                    _startupPrivilegeService.SetStandardStartup(false, exePath);
+                }
+                catch
+                {
+                    // Best-effort HKCU cleanup alongside task registration.
+                }
+            }
+
             var updated = _settingsStore.Current.Clone();
             updated.UseElevatedStartupTask = enabled;
+            if (enabled)
+            {
+                updated.LaunchAtStartup = false;
+            }
+
             await _settingsStore.SaveAsync(updated);
+            ElevatedStartupToggled?.Invoke(this, enabled);
 
             IsPrivilegeFeedbackError = false;
             PrivilegeFeedbackMessage = enabled
-                ? "已通过 Windows 任务计划程序创建免 UAC 提权开机自启任务。"
+                ? "已通过 Windows 任务计划程序创建免 UAC 提权开机自启任务（标准开机自启已同步互斥关闭）。"
                 : "已移除免 UAC 提权开机自启任务。";
         }
         catch (Exception ex)

@@ -22,19 +22,25 @@ public sealed partial class TranslationPopupWindow : WindowEx
     private const double MinPopupHeightDips = 230;
     private const double MinPopupWidthDips = 340;
     private const double MaxPopupWidthDips = 760;
+    private static readonly TimeSpan HeightThrottleInterval = TimeSpan.FromMilliseconds(60);
 
     private readonly IWindowHelperService _windowHelperService;
+    private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _heightThrottleTimer;
     private WindowBehaviorConfig _behaviorConfig = new();
     private nint _hwnd;
     private bool _isPopupVisible;
     private bool _isInternalDeactivationCheckPending;
     private bool _isProgrammaticResize;
     private bool _isResizeQueued;
+    private bool _isManualHeightLocked;
+    private int _targetProgrammaticHeightPx;
     private int _openDropDownCount;
     private DateTimeOffset _lastShownUtc = DateTimeOffset.MinValue;
+    private DateTimeOffset _lastHeightUpdateUtc = DateTimeOffset.MinValue;
 
     // Borderless toolbar drag tracking (physical screen pixels)
     private bool _isDraggingToolbar;
+    private bool _hasDraggedDistance;
     private ScreenPoint _dragStartCursorPx;
     private PointInt32 _dragStartWindowPosPx;
 
@@ -52,12 +58,25 @@ public sealed partial class TranslationPopupWindow : WindowEx
         ExtendsContentIntoTitleBar = true;
 
         _hwnd = this.GetWindowHandle();
+
+        _heightThrottleTimer = DispatcherQueue.CreateTimer();
+        _heightThrottleTimer.Interval = HeightThrottleInterval;
+        _heightThrottleTimer.IsRepeating = false;
+        _heightThrottleTimer.Tick += (_, _) =>
+        {
+            if (IsPopupVisible && !_isManualHeightLocked)
+            {
+                _lastHeightUpdateUtc = DateTimeOffset.UtcNow;
+                UpdateWindowHeightToFitContent();
+            }
+        };
+
         ViewModel.AttachDispatcher(DispatcherQueue);
         ViewModel.ContentLayoutChanged += (_, _) => ScheduleDynamicHeightUpdate();
         ViewModel.PinStateChanged += (_, isPinned) => ApplyTopMostState(isPinned);
+        ViewModel.HidePopupRequested += (_, _) => HidePopup(cancelTranslations: false);
         ViewModel.PropertyChanged += ViewModel_PropertyChanged;
 
-        SyncModeToggleButtons();
         ConfigureWindowChrome();
 
         Activated += TranslationPopupWindow_Activated;
@@ -105,7 +124,8 @@ public sealed partial class TranslationPopupWindow : WindowEx
 
     public void ShowPopup(ScreenPoint? anchorPoint, bool focusSourceInput)
     {
-        SyncModeToggleButtons();
+        _heightThrottleTimer.Stop();
+        _isManualHeightLocked = false;
 
         var desiredWidthDips = Math.Clamp(_behaviorConfig.PopupWidth, MinPopupWidthDips, MaxPopupWidthDips);
         var desiredHeightDips = CalculateDesiredHeightDips();
@@ -116,6 +136,7 @@ public sealed partial class TranslationPopupWindow : WindowEx
 
         var widthPx = Math.Max(320, (int)Math.Ceiling(desiredWidthDips * scale));
         var heightPx = Math.Max(200, (int)Math.Ceiling(desiredHeightDips * scale));
+        var cursorOffsetPx = Math.Max(8, (int)Math.Round(14 * scale));
 
         ScreenPoint targetPos;
         if (_behaviorConfig.PositionMode == WindowPositionMode.RememberFixedPosition)
@@ -131,11 +152,13 @@ public sealed partial class TranslationPopupWindow : WindowEx
                 anchor,
                 widthPx,
                 heightPx,
-                cursorOffsetPx: 14);
+                cursorOffsetPx: cursorOffsetPx);
         }
 
         _lastShownUtc = DateTimeOffset.UtcNow;
+        _lastHeightUpdateUtc = _lastShownUtc;
         _isPopupVisible = true;
+        _targetProgrammaticHeightPx = heightPx;
 
         _isProgrammaticResize = true;
         try
@@ -154,11 +177,7 @@ public sealed partial class TranslationPopupWindow : WindowEx
 
         if (focusSourceInput)
         {
-            DispatcherQueue.TryEnqueue(() =>
-            {
-                SourceTextBox.Focus(FocusState.Programmatic);
-                SourceTextBox.SelectAll();
-            });
+            FocusSourceInput();
         }
 
         ScheduleDynamicHeightUpdate();
@@ -166,13 +185,21 @@ public sealed partial class TranslationPopupWindow : WindowEx
 
     public void HidePopup(bool cancelTranslations = true)
     {
+        _heightThrottleTimer.Stop();
+
         if (cancelTranslations)
         {
             ViewModel.CancelActiveTranslation();
         }
+        else
+        {
+            ViewModel.StopActiveSpeech();
+        }
 
         _openDropDownCount = 0;
         _isDraggingToolbar = false;
+        _hasDraggedDistance = false;
+        _isManualHeightLocked = false;
         _isPopupVisible = false;
 
         if (AppWindow.IsVisible)
@@ -181,29 +208,34 @@ public sealed partial class TranslationPopupWindow : WindowEx
         }
     }
 
+    public void FocusSourceInput()
+    {
+        if (ViewModel.IsSourceCardCollapsed)
+        {
+            ViewModel.IsSourceCardCollapsed = false;
+        }
+
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            SourceTextBox.Focus(FocusState.Programmatic);
+            SourceTextBox.SelectAll();
+        });
+    }
+
     private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName is nameof(TranslationPopupViewModel.CurrentMode)
             or nameof(TranslationPopupViewModel.IsTranslateMode)
             or nameof(TranslationPopupViewModel.IsPolishMode))
         {
-            SyncModeToggleButtons();
             Title = ViewModel.WindowTitle;
             ScheduleDynamicHeightUpdate();
         }
     }
 
-    private void SyncModeToggleButtons()
-    {
-        TranslateModeButton.IsChecked = ViewModel.IsTranslateMode;
-        PolishModeButton.IsChecked = ViewModel.IsPolishMode;
-    }
-
     private void TranslateModeButton_Click(object sender, RoutedEventArgs e)
     {
-        TranslateModeButton.IsChecked = true;
-        PolishModeButton.IsChecked = false;
-        if (ViewModel.SelectTranslateModeCommand.CanExecute(null))
+        if (!ViewModel.IsTranslateMode && ViewModel.SelectTranslateModeCommand.CanExecute(null))
         {
             ViewModel.SelectTranslateModeCommand.Execute(null);
         }
@@ -211,18 +243,24 @@ public sealed partial class TranslationPopupWindow : WindowEx
 
     private void PolishModeButton_Click(object sender, RoutedEventArgs e)
     {
-        PolishModeButton.IsChecked = true;
-        TranslateModeButton.IsChecked = false;
-        if (ViewModel.SelectPolishModeCommand.CanExecute(null))
+        if (!ViewModel.IsPolishMode && ViewModel.SelectPolishModeCommand.CanExecute(null))
         {
             ViewModel.SelectPolishModeCommand.Execute(null);
         }
     }
 
+    private void ClosePopupButton_Click(object sender, RoutedEventArgs e)
+    {
+        HidePopup();
+    }
+
+    private void CollapsedSourcePreview_Tapped(object sender, TappedRoutedEventArgs e)
+    {
+        FocusSourceInput();
+    }
+
     private void ConfigureWindowChrome()
     {
-        // Best-effort: ITaskbarList may be unavailable before Explorer starts or in non-shell sessions.
-        // Win32 WS_EX_TOOLWINDOW applied below natively hides this window from taskbar & Alt+Tab.
         try
         {
             IsShownInSwitchers = false;
@@ -256,7 +294,27 @@ public sealed partial class TranslationPopupWindow : WindowEx
 
     private void ScheduleDynamicHeightUpdate()
     {
-        if (_isResizeQueued || !IsPopupVisible)
+        if (!IsPopupVisible || _isManualHeightLocked)
+        {
+            return;
+        }
+
+        var elapsed = DateTimeOffset.UtcNow - _lastHeightUpdateUtc;
+        if (elapsed < HeightThrottleInterval)
+        {
+            if (!_heightThrottleTimer.IsRunning)
+            {
+                var remaining = HeightThrottleInterval - elapsed;
+                _heightThrottleTimer.Interval = remaining > TimeSpan.FromMilliseconds(12)
+                    ? remaining
+                    : TimeSpan.FromMilliseconds(12);
+                _heightThrottleTimer.Start();
+            }
+
+            return;
+        }
+
+        if (_isResizeQueued)
         {
             return;
         }
@@ -265,17 +323,23 @@ public sealed partial class TranslationPopupWindow : WindowEx
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
         {
             _isResizeQueued = false;
-            if (!IsPopupVisible)
+            if (!IsPopupVisible || _isManualHeightLocked)
             {
                 return;
             }
 
+            _lastHeightUpdateUtc = DateTimeOffset.UtcNow;
             UpdateWindowHeightToFitContent();
         });
     }
 
     private void UpdateWindowHeightToFitContent()
     {
+        if (_isManualHeightLocked || _isDraggingToolbar)
+        {
+            return;
+        }
+
         var scale = _windowHelperService.GetDpiScaleForWindow(_hwnd);
         if (scale <= 0)
         {
@@ -288,6 +352,7 @@ public sealed partial class TranslationPopupWindow : WindowEx
 
         if (Math.Abs(currentSizePx.Height - targetHeightPx) < 4)
         {
+            _targetProgrammaticHeightPx = currentSizePx.Height;
             return;
         }
 
@@ -295,16 +360,25 @@ public sealed partial class TranslationPopupWindow : WindowEx
         var monitor = _windowHelperService.GetMonitorAtPoint(new ScreenPoint(pos.X + currentSizePx.Width / 2, pos.Y + 20));
         var work = monitor.WorkArea;
 
+        // Keep top-Y anchored during streaming; shift upward ONLY if growing past the bottom of the monitor work area.
         var newY = pos.Y;
         if (!work.IsEmpty && newY + targetHeightPx > work.Bottom)
         {
             newY = Math.Max(work.Y, work.Bottom - targetHeightPx);
         }
 
+        _targetProgrammaticHeightPx = targetHeightPx;
         _isProgrammaticResize = true;
         try
         {
-            AppWindow.MoveAndResize(new RectInt32(pos.X, newY, currentSizePx.Width, targetHeightPx));
+            if (newY == pos.Y)
+            {
+                AppWindow.Resize(new SizeInt32(currentSizePx.Width, targetHeightPx));
+            }
+            else
+            {
+                AppWindow.MoveAndResize(new RectInt32(pos.X, newY, currentSizePx.Width, targetHeightPx));
+            }
         }
         finally
         {
@@ -425,6 +499,14 @@ public sealed partial class TranslationPopupWindow : WindowEx
             _behaviorConfig.PopupWidth = Math.Round(widthDips);
             PopupWidthChanged?.Invoke(this, _behaviorConfig.PopupWidth);
         }
+
+        // Lock session auto-height if the user manually dragged the top/bottom window border vertically.
+        var actualHeightPx = AppWindow.Size.Height;
+        if (_targetProgrammaticHeightPx > 0 && Math.Abs(actualHeightPx - _targetProgrammaticHeightPx) >= 12)
+        {
+            _isManualHeightLocked = true;
+            _heightThrottleTimer.Stop();
+        }
     }
 
     private void CardsContentPanel_SizeChanged(object sender, SizeChangedEventArgs e)
@@ -448,11 +530,106 @@ public sealed partial class TranslationPopupWindow : WindowEx
         {
             e.Handled = true;
             HidePopup();
+            return;
         }
+
+        var ctrlDown = IsModifierDown(VirtualKey.Control);
+        var shiftDown = IsModifierDown(VirtualKey.Shift);
+        var altDown = IsModifierDown(VirtualKey.Menu);
+
+        // Ctrl + Shift + Enter: Write-Back (Replace Selected Text in Source Window)
+        if (ctrlDown && shiftDown && !altDown && e.Key == VirtualKey.Enter)
+        {
+            if (ViewModel.HasSourceWindow)
+            {
+                e.Handled = true;
+                _ = ViewModel.WriteBackFirstResultAsync();
+            }
+
+            return;
+        }
+
+        // Ctrl + 1..9: Copy Nth result card
+        if (ctrlDown && !shiftDown && !altDown && TryGetZeroBasedCardSlot(e.Key, out var cardIndex))
+        {
+            ViewModel.CopyCardByIndex(cardIndex);
+            e.Handled = true;
+            return;
+        }
+
+        // Ctrl + Shift + C: Copy 1st available result card
+        if (ctrlDown && shiftDown && !altDown && e.Key == VirtualKey.C)
+        {
+            ViewModel.CopyFirstAvailableCard();
+            e.Handled = true;
+            return;
+        }
+
+        // Ctrl + Tab: Toggle Translate / Polish mode
+        if (ctrlDown && !altDown && e.Key == VirtualKey.Tab)
+        {
+            ViewModel.ToggleMode();
+            e.Handled = true;
+            return;
+        }
+
+        // Ctrl + P: Toggle Pin
+        if (ctrlDown && !shiftDown && !altDown && e.Key == VirtualKey.P)
+        {
+            ViewModel.IsPinned = !ViewModel.IsPinned;
+            e.Handled = true;
+            return;
+        }
+
+        // Alt + S: Swap Source & Target languages
+        if (altDown && !ctrlDown && !shiftDown && e.Key == VirtualKey.S)
+        {
+            if (ViewModel.IsTranslateMode && ViewModel.SwapLanguagesCommand.CanExecute(null))
+            {
+                ViewModel.SwapLanguagesCommand.Execute(null);
+                e.Handled = true;
+            }
+
+            return;
+        }
+
+        // Ctrl + I: Expand & Focus Source input box
+        if (ctrlDown && !shiftDown && !altDown && e.Key == VirtualKey.I)
+        {
+            FocusSourceInput();
+            e.Handled = true;
+        }
+    }
+
+    private static bool IsModifierDown(VirtualKey modifierKey) =>
+        InputKeyboardSource.GetKeyStateForCurrentThread(modifierKey)
+            .HasFlag(CoreVirtualKeyStates.Down);
+
+    private static bool TryGetZeroBasedCardSlot(VirtualKey key, out int index)
+    {
+        if (key >= VirtualKey.Number1 && key <= VirtualKey.Number9)
+        {
+            index = (int)(key - VirtualKey.Number1);
+            return true;
+        }
+
+        if (key >= VirtualKey.NumberPad1 && key <= VirtualKey.NumberPad9)
+        {
+            index = (int)(key - VirtualKey.NumberPad1);
+            return true;
+        }
+
+        index = -1;
+        return false;
     }
 
     private void SourceTextBox_PreviewKeyDown(object sender, KeyRoutedEventArgs e)
     {
+        if (e.Handled)
+        {
+            return;
+        }
+
         if (e.Key == VirtualKey.Escape && _behaviorConfig.HideOnEscape)
         {
             e.Handled = true;
@@ -462,10 +639,19 @@ public sealed partial class TranslationPopupWindow : WindowEx
 
         if (e.Key == VirtualKey.Enter)
         {
-            var shiftDown = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift)
-                .HasFlag(CoreVirtualKeyStates.Down);
-            var ctrlDown = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Control)
-                .HasFlag(CoreVirtualKeyStates.Down);
+            var shiftDown = IsModifierDown(VirtualKey.Shift);
+            var ctrlDown = IsModifierDown(VirtualKey.Control);
+
+            if (ctrlDown && shiftDown)
+            {
+                if (ViewModel.HasSourceWindow)
+                {
+                    e.Handled = true;
+                    _ = ViewModel.WriteBackFirstResultAsync();
+                }
+
+                return;
+            }
 
             // Enter or Ctrl+Enter executes current mode immediately; Shift+Enter inserts a newline.
             if (!shiftDown || ctrlDown)
@@ -481,6 +667,11 @@ public sealed partial class TranslationPopupWindow : WindowEx
 
     private void CustomPolishPromptTextBox_PreviewKeyDown(object sender, KeyRoutedEventArgs e)
     {
+        if (e.Handled)
+        {
+            return;
+        }
+
         if (e.Key == VirtualKey.Escape && _behaviorConfig.HideOnEscape)
         {
             e.Handled = true;
@@ -488,7 +679,7 @@ public sealed partial class TranslationPopupWindow : WindowEx
             return;
         }
 
-        if (e.Key == VirtualKey.Enter)
+        if (e.Key == VirtualKey.Enter && !IsModifierDown(VirtualKey.Shift))
         {
             e.Handled = true;
             if (ViewModel.HasSourceText && ViewModel.RetranslateCommand.CanExecute(null))
@@ -528,6 +719,7 @@ public sealed partial class TranslationPopupWindow : WindowEx
         }
 
         _isDraggingToolbar = true;
+        _hasDraggedDistance = false;
         _dragStartCursorPx = _windowHelperService.GetCursorPosition();
         _dragStartWindowPosPx = AppWindow.Position;
         TopToolbarGrid.CapturePointer(e.Pointer);
@@ -544,7 +736,21 @@ public sealed partial class TranslationPopupWindow : WindowEx
         var currentCursor = _windowHelperService.GetCursorPosition();
         var dx = currentCursor.X - _dragStartCursorPx.X;
         var dy = currentCursor.Y - _dragStartCursorPx.Y;
-        AppWindow.Move(new PointInt32(_dragStartWindowPosPx.X + dx, _dragStartWindowPosPx.Y + dy));
+
+        if (!_hasDraggedDistance && (Math.Abs(dx) >= 3 || Math.Abs(dy) >= 3))
+        {
+            _hasDraggedDistance = true;
+            if (!ViewModel.IsPinned)
+            {
+                ViewModel.IsPinned = true;
+            }
+        }
+
+        if (_hasDraggedDistance)
+        {
+            AppWindow.Move(new PointInt32(_dragStartWindowPosPx.X + dx, _dragStartWindowPosPx.Y + dy));
+        }
+
         e.Handled = true;
     }
 
@@ -569,10 +775,23 @@ public sealed partial class TranslationPopupWindow : WindowEx
 
     private void FinishToolbarDrag(Pointer? pointer)
     {
+        var dragged = _hasDraggedDistance;
         _isDraggingToolbar = false;
+        _hasDraggedDistance = false;
+
         if (pointer is not null)
         {
             TopToolbarGrid.ReleasePointerCapture(pointer);
+        }
+
+        if (!dragged)
+        {
+            return;
+        }
+
+        if (!ViewModel.IsPinned)
+        {
+            ViewModel.IsPinned = true;
         }
 
         var pos = AppWindow.Position;

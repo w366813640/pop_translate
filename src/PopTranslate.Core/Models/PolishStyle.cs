@@ -8,4 +8,5 @@ public enum PolishStyle
     Casual = 3,
     Concise = 4,
     Custom = 5,
+    CodeNaming = 6,
 }

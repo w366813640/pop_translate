@@ -18,8 +18,10 @@
                 MinWidth="180"
                 Height="34"
                 Padding="12,0"
+                AutomationProperties.Name="录制快捷键"
                 Click="RecorderButton_Click"
                 PreviewKeyDown="RecorderButton_PreviewKeyDown"
+                PreviewKeyUp="RecorderButton_PreviewKeyUp"
                 LostFocus="RecorderButton_LostFocus">
                 <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                     <FontIcon
@@ -41,6 +43,7 @@
                 Width="34"
                 Height="34"
                 Padding="0"
+                AutomationProperties.Name="清除快捷键"
                 ToolTipService.ToolTip="清除快捷键"
                 Click="ClearButton_Click">
                 <FontIcon FontSize="12" Glyph="&#xE711;" />

@@ -67,8 +67,10 @@ public sealed class OpenAiCompatibleTranslationProviderTests
         Assert.Equal("gpt-4o-mini", bodyDoc.RootElement.GetProperty("model").GetString());
         Assert.True(bodyDoc.RootElement.GetProperty("stream").GetBoolean());
         var messages = bodyDoc.RootElement.GetProperty("messages");
-        Assert.Equal("Translate from English to Chinese (Simplified).", messages[0].GetProperty("content").GetString());
-        Assert.Equal("Hello world", messages[1].GetProperty("content").GetString());
+        var systemContent = messages[0].GetProperty("content").GetString() ?? string.Empty;
+        Assert.StartsWith("Translate from English to Chinese (Simplified).", systemContent, StringComparison.Ordinal);
+        Assert.Contains("<source_text>", systemContent, StringComparison.Ordinal);
+        Assert.Equal("<source_text>\nHello world\n</source_text>", messages[1].GetProperty("content").GetString());
 
         Assert.Equal(["你好", "，世界"], chunks.Where(c => !string.IsNullOrEmpty(c.DeltaText)).Select(c => c.DeltaText).ToList());
         Assert.True(chunks[^1].IsComplete);

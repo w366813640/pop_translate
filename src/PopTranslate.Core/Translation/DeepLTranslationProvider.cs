@@ -13,6 +13,8 @@ public sealed class DeepLTranslationProvider : ITranslationProvider
 {
     private const string FreeEndpoint = "https://api-free.deepl.com/v2/translate";
     private const string ProEndpoint = "https://api.deepl.com/v2/translate";
+    private const string FreeUsageEndpoint = "https://api-free.deepl.com/v2/usage";
+    private const string ProUsageEndpoint = "https://api.deepl.com/v2/usage";
 
     private readonly IProxyHttpClientFactory _httpClientFactory;
     private readonly ISecretProtector _secretProtector;
@@ -69,7 +71,17 @@ public sealed class DeepLTranslationProvider : ITranslationProvider
 
         var sw = Stopwatch.StartNew();
 
-        var apiKey = _secretProtector.Unprotect(config.EncryptedApiKey).Trim();
+        string apiKey;
+        try
+        {
+            apiKey = _secretProtector.Unprotect(config.EncryptedApiKey).Trim();
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            return Failure(config, request, $"Failed to decrypt DeepL API key: {ex.Message}", sw.Elapsed);
+        }
+
         if (string.IsNullOrEmpty(apiKey))
         {
             sw.Stop();
@@ -112,15 +124,16 @@ public sealed class DeepLTranslationProvider : ITranslationProvider
         }
 
         var timeoutSeconds = Math.Clamp(config.TimeoutSeconds <= 0 ? 20 : config.TimeoutSeconds, 5, 180);
-        using var httpClient = _httpClientFactory.CreateClient(timeout: TimeSpan.FromSeconds(timeoutSeconds));
-        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, endpointUri)
-        {
-            Content = new StringContent(JsonSerializer.Serialize(payloadDict), Encoding.UTF8, "application/json"),
-        };
-        httpRequest.Headers.Authorization = new AuthenticationHeaderValue("DeepL-Auth-Key", apiKey);
 
         try
         {
+            using var httpClient = _httpClientFactory.CreateClient(timeout: TimeSpan.FromSeconds(timeoutSeconds));
+            using var httpRequest = new HttpRequestMessage(HttpMethod.Post, endpointUri)
+            {
+                Content = new StringContent(JsonSerializer.Serialize(payloadDict), Encoding.UTF8, "application/json"),
+            };
+            httpRequest.Headers.Authorization = new AuthenticationHeaderValue("DeepL-Auth-Key", apiKey);
+
             using var response = await httpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
             var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
 
@@ -162,6 +175,11 @@ public sealed class DeepLTranslationProvider : ITranslationProvider
             sw.Stop();
             return Failure(config, request, $"Network error contacting DeepL: {ex.Message}", sw.Elapsed);
         }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            return Failure(config, request, $"DeepL error: {ex.Message}", sw.Elapsed);
+        }
     }
 
     public async Task<ProviderHealthCheckResult> TestConnectionAsync(
@@ -171,18 +189,75 @@ public sealed class DeepLTranslationProvider : ITranslationProvider
         ArgumentNullException.ThrowIfNull(config);
 
         var sw = Stopwatch.StartNew();
-        var result = await TranslateAsync(
-            new TranslationRequest("Hello", LanguageCode.English, LanguageCode.ChineseSimplified, ApplyTextPreprocessing: false),
-            config,
-            cancellationToken).ConfigureAwait(false);
-        sw.Stop();
 
-        if (!result.IsSuccess)
+        string apiKey;
+        try
         {
-            return new ProviderHealthCheckResult(false, result.ErrorMessage ?? "DeepL connection test failed.", sw.Elapsed);
+            apiKey = _secretProtector.Unprotect(config.EncryptedApiKey).Trim();
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            return new ProviderHealthCheckResult(false, $"Failed to decrypt DeepL API key: {ex.Message}", sw.Elapsed);
         }
 
-        return new ProviderHealthCheckResult(true, $"Connected ({result.TranslatedText.Trim()}).", sw.Elapsed);
+        if (string.IsNullOrEmpty(apiKey))
+        {
+            sw.Stop();
+            return new ProviderHealthCheckResult(false, "API key is required for DeepL provider.", sw.Elapsed);
+        }
+
+        var usageUrl = ResolveUsageEndpointUrl(config, apiKey);
+        if (!Uri.TryCreate(usageUrl, UriKind.Absolute, out var usageUri) ||
+            (usageUri.Scheme != Uri.UriSchemeHttp && usageUri.Scheme != Uri.UriSchemeHttps))
+        {
+            sw.Stop();
+            return new ProviderHealthCheckResult(false, $"Invalid DeepL endpoint URL '{usageUrl}'.", sw.Elapsed);
+        }
+
+        var timeoutSeconds = Math.Clamp(config.TimeoutSeconds <= 0 ? 20 : config.TimeoutSeconds, 5, 180);
+
+        try
+        {
+            using var httpClient = _httpClientFactory.CreateClient(timeout: TimeSpan.FromSeconds(timeoutSeconds));
+            using var httpRequest = new HttpRequestMessage(HttpMethod.Get, usageUri);
+            httpRequest.Headers.Authorization = new AuthenticationHeaderValue("DeepL-Auth-Key", apiKey);
+
+            using var response = await httpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
+            var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            sw.Stop();
+
+            if (!response.IsSuccessStatusCode)
+            {
+                return new ProviderHealthCheckResult(false, FormatHttpError(response.StatusCode, body), sw.Elapsed);
+            }
+
+            if (TryParseUsageSummary(body, out var usageSummary))
+            {
+                return new ProviderHealthCheckResult(true, $"Connected ({usageSummary}).", sw.Elapsed);
+            }
+
+            return new ProviderHealthCheckResult(true, "Connected to DeepL successfully.", sw.Elapsed);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            sw.Stop();
+            return new ProviderHealthCheckResult(false, $"DeepL connection check timed out after {timeoutSeconds}s.", sw.Elapsed);
+        }
+        catch (HttpRequestException ex)
+        {
+            sw.Stop();
+            return new ProviderHealthCheckResult(false, $"Network error contacting DeepL: {ex.Message}", sw.Elapsed);
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            return new ProviderHealthCheckResult(false, $"DeepL connection check error: {ex.Message}", sw.Elapsed);
+        }
     }
 
     public static string ResolveEndpointUrl(ProviderInstanceConfig config, string apiKey)
@@ -207,6 +282,35 @@ public sealed class DeepLTranslationProvider : ITranslationProvider
                       (config.DeepLTier == DeepLEndpointTier.Auto && apiKey.EndsWith(":fx", StringComparison.OrdinalIgnoreCase));
 
         return useFree ? FreeEndpoint : ProEndpoint;
+    }
+
+    public static string ResolveUsageEndpointUrl(ProviderInstanceConfig config, string apiKey)
+    {
+        if (!string.IsNullOrWhiteSpace(config.BaseUrl))
+        {
+            var custom = config.BaseUrl.Trim().TrimEnd('/');
+            if (custom.EndsWith("/v2/translate", StringComparison.OrdinalIgnoreCase))
+            {
+                return custom[..^"/translate".Length] + "/usage";
+            }
+
+            if (custom.EndsWith("/v2/usage", StringComparison.OrdinalIgnoreCase))
+            {
+                return custom;
+            }
+
+            if (custom.EndsWith("/v2", StringComparison.OrdinalIgnoreCase))
+            {
+                return custom + "/usage";
+            }
+
+            return custom + "/v2/usage";
+        }
+
+        var useFree = config.DeepLTier == DeepLEndpointTier.Free ||
+                      (config.DeepLTier == DeepLEndpointTier.Auto && apiKey.EndsWith(":fx", StringComparison.OrdinalIgnoreCase));
+
+        return useFree ? FreeUsageEndpoint : ProUsageEndpoint;
     }
 
     public static string MapTargetLanguage(LanguageCode code) => code.Value switch
@@ -241,6 +345,36 @@ public sealed class DeepLTranslationProvider : ITranslationProvider
         "ar" => "AR",
         _ => code.Value.ToUpperInvariant(),
     };
+
+    private static bool TryParseUsageSummary(string body, out string summary)
+    {
+        summary = string.Empty;
+        if (string.IsNullOrWhiteSpace(body))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            if (root.ValueKind == JsonValueKind.Object &&
+                root.TryGetProperty("character_count", out var countProp) &&
+                root.TryGetProperty("character_limit", out var limitProp) &&
+                countProp.TryGetInt64(out var count) &&
+                limitProp.TryGetInt64(out var limit))
+            {
+                summary = $"Quota: {count:N0} / {limit:N0} chars";
+                return true;
+            }
+        }
+        catch (JsonException)
+        {
+            // Ignore optional usage body formatting differences if HTTP 200 succeeded.
+        }
+
+        return false;
+    }
 
     private static bool TryParseResponse(
         string body,

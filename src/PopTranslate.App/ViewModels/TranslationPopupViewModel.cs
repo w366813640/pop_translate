@@ -1,10 +1,14 @@
 using System.Collections.ObjectModel;
+using System.Runtime.InteropServices.WindowsRuntime;
 using PopTranslate.App.Services;
 using PopTranslate.Core.Contracts;
 using PopTranslate.Core.Models;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.UI.Dispatching;
+using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Imaging;
+using Windows.Storage.Streams;
 
 namespace PopTranslate.App.ViewModels;
 
@@ -18,9 +22,15 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
     private readonly IBackTranslationService _backTranslationService;
     private readonly IPolishOrchestrator _polishOrchestrator;
     private readonly ITextDiffService _textDiffService;
+    private readonly IOcrOrchestrator _ocrOrchestrator;
+    private readonly ITextWriteBackService _textWriteBackService;
+    private readonly ITtsService _ttsService;
 
     private DispatcherQueue? _dispatcher;
     private CancellationTokenSource? _activeTranslationCts;
+    private CancellationTokenSource? _ocrRerunCts;
+    private CancellationTokenSource? _ttsCts;
+    private string? _speakingCardId;
     private readonly Dictionary<string, CancellationTokenSource> _singleRetryCtsMap = new(StringComparer.Ordinal);
     private readonly Dictionary<string, CancellationTokenSource> _backTranslateCtsMap = new(StringComparer.Ordinal);
     private readonly HashSet<string> _autoBackTranslatedCardIds = new(StringComparer.Ordinal);
@@ -34,6 +44,9 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
     private bool _lastSettingMergeLineBreaks = true;
     private PolishStyle _lastSettingDefaultPolishStyle = PolishStyle.General;
     private string _lastSettingCustomPrompt = PolishConfig.DefaultCustomPrompt;
+    private OcrPromptMode _lastSettingOcrPromptMode = OcrPromptMode.PlainText;
+    private CapturedScreenshot? _lastOcrScreenshot;
+    private nint _sourceWindowHandle;
 
     public TranslationPopupViewModel(
         ISettingsStore settingsStore,
@@ -43,7 +56,10 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
         ITranslationOrchestrator translationOrchestrator,
         IBackTranslationService backTranslationService,
         IPolishOrchestrator polishOrchestrator,
-        ITextDiffService textDiffService)
+        ITextDiffService textDiffService,
+        IOcrOrchestrator ocrOrchestrator,
+        ITextWriteBackService textWriteBackService,
+        ITtsService ttsService)
     {
         _settingsStore = settingsStore;
         _textPreprocessor = textPreprocessor;
@@ -53,19 +69,25 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
         _backTranslationService = backTranslationService;
         _polishOrchestrator = polishOrchestrator;
         _textDiffService = textDiffService;
+        _ocrOrchestrator = ocrOrchestrator;
+        _textWriteBackService = textWriteBackService;
+        _ttsService = ttsService;
 
         SourceLanguageOptions = BuildSourceLanguageOptions();
         TargetLanguageOptions = BuildTargetLanguageOptions(AppSettings.CreateDefault());
         PolishStyleOptions = new ObservableCollection<PolishStyleOption>(PolishStyleOption.CreatePresets());
+        OcrPromptModeOptions = new ObservableCollection<OcrPromptModeOption>(OcrPromptModeOption.CreatePresets());
 
         SelectedSourceLanguage = SourceLanguageOptions[0];
         SelectedTargetLanguage = TargetLanguageOptions[0];
         SelectedPolishStyle = PolishStyleOptions[0];
+        SelectedOcrPromptMode = OcrPromptModeOptions[0];
         MergeLineBreaks = true;
     }
 
     public event EventHandler? ContentLayoutChanged;
     public event EventHandler<bool>? PinStateChanged;
+    public event EventHandler? HidePopupRequested;
 
     public ObservableCollection<LanguageOption> SourceLanguageOptions { get; }
 
@@ -73,7 +95,13 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
 
     public ObservableCollection<PolishStyleOption> PolishStyleOptions { get; }
 
+    public ObservableCollection<OcrPromptModeOption> OcrPromptModeOptions { get; }
+
     public ObservableCollection<ServiceCardViewModel> ServiceCards { get; } = [];
+
+    public nint SourceWindowHandle => _sourceWindowHandle;
+
+    public bool HasSourceWindow => _sourceWindowHandle != 0;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsTranslateMode))]
@@ -92,6 +120,7 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasSourceText))]
     [NotifyPropertyChangedFor(nameof(CharacterCountText))]
+    [NotifyPropertyChangedFor(nameof(SourceCollapsedPreviewText))]
     public partial string SourceText { get; set; } = string.Empty;
 
     [ObservableProperty]
@@ -103,6 +132,9 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsCustomPolishStyleSelected))]
     public partial PolishStyleOption SelectedPolishStyle { get; set; }
+
+    [ObservableProperty]
+    public partial OcrPromptModeOption SelectedOcrPromptMode { get; set; }
 
     [ObservableProperty]
     public partial string InlineCustomPrompt { get; set; } = PolishConfig.DefaultCustomPrompt;
@@ -118,6 +150,23 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(PinGlyph))]
     [NotifyPropertyChangedFor(nameof(PinTooltip))]
     public partial bool IsPinned { get; set; }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsSourceCardExpanded))]
+    [NotifyPropertyChangedFor(nameof(SourceCollapseGlyph))]
+    [NotifyPropertyChangedFor(nameof(SourceCollapseTooltip))]
+    public partial bool IsSourceCardCollapsed { get; set; }
+
+    [ObservableProperty]
+    public partial bool HasOcrContext { get; set; }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(OcrPreviewChevronGlyph))]
+    [NotifyPropertyChangedFor(nameof(OcrPreviewToggleLabel))]
+    public partial bool IsOcrPreviewExpanded { get; set; }
+
+    [ObservableProperty]
+    public partial ImageSource? OcrPreviewImage { get; set; }
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ShowEmptyHint))]
@@ -148,11 +197,44 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(SourceCopyTooltip))]
     public partial bool SourceJustCopied { get; set; }
 
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SourceSpeakGlyph))]
+    [NotifyPropertyChangedFor(nameof(SourceSpeakTooltip))]
+    public partial bool IsSpeakingSource { get; set; }
+
     public bool IsTranslateMode => CurrentMode == PopupMode.Translate;
 
     public bool IsPolishMode => CurrentMode == PopupMode.Polish;
 
     public bool IsCustomPolishStyleSelected => SelectedPolishStyle?.Style == PolishStyle.Custom;
+
+    public bool IsSourceCardExpanded => !IsSourceCardCollapsed;
+
+    public string SourceCollapseGlyph => IsSourceCardCollapsed ? "\uE70D" : "\uE70E";
+
+    public string SourceCollapseTooltip => IsSourceCardCollapsed ? "展开原文编辑框 (Ctrl+I)" : "折叠原文编辑框";
+
+    public string SourceCollapsedPreviewText
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(SourceText))
+            {
+                return "点击展开输入或粘贴原文...";
+            }
+
+            var collapsed = SourceText
+                .Replace("\r\n", " ", StringComparison.Ordinal)
+                .Replace('\r', ' ')
+                .Replace('\n', ' ')
+                .Trim();
+            return collapsed.Length <= 100 ? collapsed : string.Concat(collapsed.AsSpan(0, 100), "...");
+        }
+    }
+
+    public string OcrPreviewChevronGlyph => IsOcrPreviewExpanded ? "\uE70E" : "\uE70D";
+
+    public string OcrPreviewToggleLabel => IsOcrPreviewExpanded ? "收起截图" : "截图预览";
 
     public string WindowTitle => IsPolishMode ? "PopTranslate 润色" : "PopTranslate 翻译";
 
@@ -163,8 +245,8 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
         : "输入或粘贴文本，按 Enter 翻译（Shift+Enter 换行）";
 
     public string EmptyHintText => IsPolishMode
-        ? "输入文本后按 Enter 立即并发润色 · 按 Esc 隐藏弹窗"
-        : "输入文本后按 Enter 立即并发翻译 · 按 Esc 隐藏弹窗";
+        ? "输入文本后按 Enter 立即并发润色 · Ctrl+Tab 切换翻译 · Esc 隐藏"
+        : "输入文本后按 Enter 立即并发翻译 · Ctrl+Tab 切换润色 · Esc 隐藏";
 
     public string NoProvidersHintText => IsPolishMode
         ? "润色功能需要至少启用一个 OpenAI 兼容大模型服务"
@@ -184,6 +266,10 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
 
     public string SourceCopyTooltip => SourceJustCopied ? "已复制原文" : "复制原文";
 
+    public string SourceSpeakGlyph => IsSpeakingSource ? "\uE71A" : "\uE767";
+
+    public string SourceSpeakTooltip => IsSpeakingSource ? "停止朗读原文" : "朗读原文";
+
     public bool HasDetectedBadge => !string.IsNullOrWhiteSpace(DetectedLanguageBadge);
 
     public bool HasStatusBanner => !string.IsNullOrWhiteSpace(StatusBannerText);
@@ -194,11 +280,27 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
 
     public string PinGlyph => IsPinned ? "\uE840" : "\uE718";
 
-    public string PinTooltip => IsPinned ? "取消置顶（恢复失焦自动隐藏）" : "置顶弹窗（取消失焦自动隐藏）";
+    public string PinTooltip => IsPinned ? "取消置顶（恢复失焦自动隐藏，Ctrl+P）" : "置顶弹窗（取消失焦自动隐藏，Ctrl+P）";
 
     public void AttachDispatcher(DispatcherQueue dispatcher)
     {
         _dispatcher = dispatcher;
+    }
+
+    public void SetSourceWindowHandle(nint windowHandle)
+    {
+        if (_sourceWindowHandle != windowHandle)
+        {
+            _sourceWindowHandle = windowHandle;
+            OnPropertyChanged(nameof(SourceWindowHandle));
+            OnPropertyChanged(nameof(HasSourceWindow));
+        }
+
+        var hasWindow = windowHandle != 0;
+        foreach (var card in ServiceCards)
+        {
+            card.HasSourceWindow = hasWindow;
+        }
     }
 
     public void ApplySettings(AppSettings settings, bool applySessionDefaults = false)
@@ -246,6 +348,14 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
                 _lastSettingCustomPrompt = resolvedPrompt;
             }
 
+            var ocrMode = settings.Ocr?.PromptMode ?? OcrPromptMode.PlainText;
+            if (applySessionDefaults || ocrMode != _lastSettingOcrPromptMode)
+            {
+                SelectedOcrPromptMode = OcrPromptModeOptions.FirstOrDefault(x => x.Mode == ocrMode)
+                    ?? OcrPromptModeOptions[0];
+                _lastSettingOcrPromptMode = ocrMode;
+            }
+
             HasEnabledProviders = settings.Providers.Any(p => p.Enabled);
             HasEligiblePolishProviders = SafeGetEligiblePolishProviders().Count > 0;
         }
@@ -258,15 +368,14 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
     public void PrepareForInput(string? initialHint = null)
     {
         CancelActiveTranslation();
-        var modeChanged = CurrentMode != PopupMode.Translate;
+        _lastRequestWasFromOcr = false;
+        ClearOcrContext();
+
         CurrentMode = PopupMode.Translate;
-
-        if (modeChanged)
-        {
-            ServiceCards.Clear();
-            DetectedLanguageBadge = string.Empty;
-        }
-
+        IsSourceCardCollapsed = false;
+        SourceText = string.Empty;
+        ServiceCards.Clear();
+        DetectedLanguageBadge = string.Empty;
         IsOcrLoading = false;
         StatusBannerText = initialHint;
         IsStatusError = false;
@@ -278,17 +387,16 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
     public void PrepareForPolishInput(string? initialHint = null)
     {
         CancelActiveTranslation();
-        var modeChanged = CurrentMode != PopupMode.Polish;
-        CurrentMode = PopupMode.Polish;
+        _lastRequestWasFromOcr = false;
+        ClearOcrContext();
 
+        CurrentMode = PopupMode.Polish;
+        IsSourceCardCollapsed = false;
         SyncPolishDefaultsFromSettings();
 
-        if (modeChanged)
-        {
-            ServiceCards.Clear();
-            DetectedLanguageBadge = string.Empty;
-        }
-
+        SourceText = string.Empty;
+        ServiceCards.Clear();
+        DetectedLanguageBadge = string.Empty;
         IsOcrLoading = false;
         StatusBannerText = initialHint;
         IsStatusError = false;
@@ -297,13 +405,27 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
         NotifyLayoutChanged();
     }
 
-    public void BeginOcrCapture()
+    public void BeginOcrCapture(CapturedScreenshot? screenshot = null)
     {
         CancelActiveTranslation();
+        _lastRequestWasFromOcr = true;
+        _lastOcrScreenshot = screenshot;
+
         CurrentMode = PopupMode.Translate;
+        IsSourceCardCollapsed = false;
         SourceText = string.Empty;
         DetectedLanguageBadge = string.Empty;
         ServiceCards.Clear();
+
+        SyncOcrPromptModeFromSettings();
+        HasOcrContext = screenshot is not null;
+        IsOcrPreviewExpanded = false;
+        OcrPreviewImage = null;
+        if (screenshot is { PngBytes.Length: > 0 })
+        {
+            _ = LoadOcrPreviewBitmapAsync(screenshot.PngBytes);
+        }
+
         IsOcrLoading = true;
         IsStatusError = false;
         StatusBannerText = "正在识别截图中的文字...";
@@ -329,6 +451,11 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
         StatusBannerText = null;
         _lastRequestWasFromOcr = isFromOcr;
 
+        if (!isFromOcr)
+        {
+            ClearOcrContext();
+        }
+
         if (resetLanguageSelection)
         {
             _isSuppressingLanguageReaction = true;
@@ -343,7 +470,9 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
             }
         }
 
-        var preprocessed = _textPreprocessor.Preprocess(rawText, MergeLineBreaks, isFromOcr);
+        var mergeBreaks = MergeLineBreaks &&
+                          (!isFromOcr || SelectedOcrPromptMode.Mode == OcrPromptMode.PlainText);
+        var preprocessed = PreprocessForCurrentMode(rawText, mergeBreaks, isFromOcr, PopupMode.Translate);
         SourceText = preprocessed;
 
         if (string.IsNullOrWhiteSpace(preprocessed))
@@ -367,13 +496,14 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
         IsStatusError = false;
         StatusBannerText = null;
         _lastRequestWasFromOcr = false;
+        ClearOcrContext();
 
         if (resetStyleToDefault)
         {
             SyncPolishDefaultsFromSettings();
         }
 
-        var preprocessed = _textPreprocessor.Preprocess(rawText, MergeLineBreaks, isFromOcr: false);
+        var preprocessed = PreprocessForCurrentMode(rawText, MergeLineBreaks, isFromOcr: false, PopupMode.Polish);
         SourceText = preprocessed;
 
         if (string.IsNullOrWhiteSpace(preprocessed))
@@ -395,6 +525,9 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
 
     [RelayCommand]
     private void SelectPolishMode() => SwitchMode(PopupMode.Polish);
+
+    public void ToggleMode() =>
+        SwitchMode(CurrentMode == PopupMode.Translate ? PopupMode.Polish : PopupMode.Translate);
 
     public void SwitchMode(PopupMode mode)
     {
@@ -438,11 +571,16 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
             return;
         }
 
-        var processed = _textPreprocessor.Preprocess(text, MergeLineBreaks, CurrentMode == PopupMode.Translate && _lastRequestWasFromOcr);
-        if (!string.Equals(processed, SourceText, StringComparison.Ordinal))
-        {
-            SourceText = processed;
-        }
+        // Preserve user's manual Shift+Enter newlines in SourceText without overwriting SourceText!
+        var isOcrFlow = CurrentMode == PopupMode.Translate && _lastRequestWasFromOcr;
+        var shouldMergeLineBreaks = isOcrFlow &&
+                                    MergeLineBreaks &&
+                                    SelectedOcrPromptMode.Mode == OcrPromptMode.PlainText;
+        var processed = PreprocessForCurrentMode(
+            text,
+            mergeLineBreaks: shouldMergeLineBreaks,
+            isFromOcr: isOcrFlow,
+            mode: CurrentMode);
 
         if (CurrentMode == PopupMode.Polish)
         {
@@ -450,7 +588,106 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
         }
         else
         {
-            await ExecuteTranslationAsync(processed, _lastRequestWasFromOcr);
+            await ExecuteTranslationAsync(processed, isOcrFlow);
+        }
+    }
+
+    private string PreprocessForCurrentMode(string rawText, bool mergeLineBreaks, bool isFromOcr, PopupMode mode)
+    {
+        if (string.IsNullOrWhiteSpace(rawText))
+        {
+            return string.Empty;
+        }
+
+        var settings = _settingsStore.Current;
+        var disableIdentifierSplit = !settings.EnableCodeIdentifierSplit ||
+                                     isFromOcr ||
+                                     (mode == PopupMode.Polish && SelectedPolishStyle?.Style == PolishStyle.CodeNaming);
+
+        if (disableIdentifierSplit && IsSingleWhitespaceFreeToken(rawText))
+        {
+            return rawText.Trim();
+        }
+
+        return _textPreprocessor.Preprocess(rawText, mergeLineBreaks, isFromOcr);
+    }
+
+    private static bool IsSingleWhitespaceFreeToken(string rawText)
+    {
+        foreach (var ch in rawText.AsSpan().Trim())
+        {
+            if (char.IsWhiteSpace(ch))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    [RelayCommand]
+    private void ToggleSourceCollapse()
+    {
+        IsSourceCardCollapsed = !IsSourceCardCollapsed;
+        NotifyLayoutChanged();
+    }
+
+    [RelayCommand]
+    private void ToggleOcrPreview()
+    {
+        IsOcrPreviewExpanded = !IsOcrPreviewExpanded;
+        NotifyLayoutChanged();
+    }
+
+    [RelayCommand]
+    public async Task RerunOcrAsync()
+    {
+        var screenshot = _lastOcrScreenshot;
+        if (screenshot is null || screenshot.PngBytes.Length == 0)
+        {
+            return;
+        }
+
+        CancelActiveTranslation();
+        _ocrRerunCts?.Cancel();
+        _ocrRerunCts?.Dispose();
+        _ocrRerunCts = new CancellationTokenSource();
+        var ct = _ocrRerunCts.Token;
+
+        ServiceCards.Clear();
+        IsOcrLoading = true;
+        IsStatusError = false;
+        StatusBannerText = $"正在按「{SelectedOcrPromptMode.DisplayLabel}」模式重新识别...";
+        OnPropertyChanged(nameof(ShowEmptyHint));
+        NotifyLayoutChanged();
+
+        try
+        {
+            var ocrResult = await _ocrOrchestrator.RecognizeAsync(screenshot.ToOcrImage(), ct);
+            if (ct.IsCancellationRequested)
+            {
+                return;
+            }
+
+            if (ocrResult.IsSuccess && !string.IsNullOrWhiteSpace(ocrResult.Text))
+            {
+                await TranslateTextAsync(ocrResult.Text, isFromOcr: true, resetLanguageSelection: false);
+            }
+            else
+            {
+                var error = string.IsNullOrWhiteSpace(ocrResult.ErrorMessage)
+                    ? "未在所选截图区域中识别到文字。"
+                    : $"OCR 识别失败：{ocrResult.ErrorMessage}";
+                ShowStatusError(error);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Cancelled cleanly.
+        }
+        catch (Exception ex)
+        {
+            ShowStatusError($"OCR 识别异常：{ex.Message}");
         }
     }
 
@@ -491,7 +728,7 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
     [RelayCommand]
     private void CopySource()
     {
-        if (!AppAssetHelper.TryCopyTextToClipboard(SourceText))
+        if (!ClipboardLoopGuard.TryCopyText(SourceText))
         {
             return;
         }
@@ -517,8 +754,248 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
         NotifyLayoutChanged();
     }
 
+    [RelayCommand]
+    public async Task ToggleSpeakSourceAsync()
+    {
+        if (IsSpeakingSource)
+        {
+            StopActiveSpeech();
+            return;
+        }
+
+        var text = SourceText?.Trim();
+        if (string.IsNullOrEmpty(text))
+        {
+            return;
+        }
+
+        StopActiveSpeech();
+
+        var cts = new CancellationTokenSource();
+        _ttsCts = cts;
+        IsSpeakingSource = true;
+
+        var lang = !SelectedSourceLanguage.Code.IsAuto
+            ? SelectedSourceLanguage.Code
+            : (!_lastDetectedSource.IsAuto ? _lastDetectedSource : _languageDetector.Detect(text).Language);
+
+        try
+        {
+            await _ttsService.SpeakAsync(text, lang.IsAuto ? null : lang, cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // Speech stopped cleanly.
+        }
+        catch (Exception ex)
+        {
+            AppDiagnosticsLogger.Warn("TTS", "Source speech playback failed.", ex);
+        }
+        finally
+        {
+            EnqueueUi(() =>
+            {
+                if (ReferenceEquals(_ttsCts, cts))
+                {
+                    _ttsCts = null;
+                    IsSpeakingSource = false;
+                }
+            });
+
+            cts.Dispose();
+        }
+    }
+
+    public async Task ToggleSpeakCardAsync(string providerInstanceId)
+    {
+        var card = ServiceCards.FirstOrDefault(c => string.Equals(c.ProviderInstanceId, providerInstanceId, StringComparison.Ordinal));
+        if (card is null || string.IsNullOrWhiteSpace(card.TranslatedText))
+        {
+            return;
+        }
+
+        if (card.IsSpeaking && string.Equals(_speakingCardId, providerInstanceId, StringComparison.Ordinal))
+        {
+            StopActiveSpeech();
+            return;
+        }
+
+        StopActiveSpeech();
+
+        var cts = new CancellationTokenSource();
+        _ttsCts = cts;
+        _speakingCardId = providerInstanceId;
+        card.IsSpeaking = true;
+
+        var lang = !card.TargetLanguage.IsAuto
+            ? card.TargetLanguage
+            : _languageDetector.Detect(card.TranslatedText).Language;
+
+        try
+        {
+            await _ttsService.SpeakAsync(card.TranslatedText, lang.IsAuto ? null : lang, cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // Speech stopped cleanly.
+        }
+        catch (Exception ex)
+        {
+            AppDiagnosticsLogger.Warn("TTS", "Card speech playback failed.", ex);
+        }
+        finally
+        {
+            EnqueueUi(() =>
+            {
+                if (ReferenceEquals(_ttsCts, cts))
+                {
+                    _ttsCts = null;
+                    _speakingCardId = null;
+                    card.IsSpeaking = false;
+                }
+            });
+
+            cts.Dispose();
+        }
+    }
+
+    public void StopActiveSpeech()
+    {
+        if (_ttsCts is not null)
+        {
+            try
+            {
+                _ttsCts.Cancel();
+            }
+            catch
+            {
+                // Ignore cancellation race.
+            }
+
+            _ttsCts = null;
+        }
+
+        try
+        {
+            if (_ttsService.IsSpeaking)
+            {
+                _ttsService.Stop();
+            }
+        }
+        catch
+        {
+            // Ignore TTS teardown errors.
+        }
+
+        IsSpeakingSource = false;
+        _speakingCardId = null;
+        foreach (var card in ServiceCards)
+        {
+            if (card.IsSpeaking)
+            {
+                card.IsSpeaking = false;
+            }
+        }
+    }
+
+    public async Task<bool> WriteBackCardAsync(string providerInstanceId)
+    {
+        var card = ServiceCards.FirstOrDefault(c => string.Equals(c.ProviderInstanceId, providerInstanceId, StringComparison.Ordinal));
+        if (card is null || _sourceWindowHandle == 0 || string.IsNullOrEmpty(card.TranslatedText) || card.IsLoading)
+        {
+            return false;
+        }
+
+        StopActiveSpeech();
+        var targetHwnd = _sourceWindowHandle;
+        var text = card.TranslatedText;
+
+        ClipboardLoopGuard.SuppressFor(TimeSpan.FromMilliseconds(1400));
+        HidePopupRequested?.Invoke(this, EventArgs.Empty);
+
+        try
+        {
+            // Allow popup hide transition to relinquish foreground cleanly before SendInput Ctrl+V.
+            await Task.Delay(25);
+            var replaced = await _textWriteBackService.ReplaceTextInWindowAsync(targetHwnd, text);
+            if (replaced)
+            {
+                card.MarkWroteBack();
+            }
+
+            return replaced;
+        }
+        catch (Exception ex)
+        {
+            AppDiagnosticsLogger.Warn("WriteBack", "Write-back replacement failed.", ex);
+            return false;
+        }
+    }
+
+    public async Task<bool> WriteBackFirstResultAsync()
+    {
+        if (_sourceWindowHandle == 0)
+        {
+            return false;
+        }
+
+        var candidate = ServiceCards.FirstOrDefault(c => c.CanWriteBack);
+        if (candidate is null)
+        {
+            return false;
+        }
+
+        return await WriteBackCardAsync(candidate.ProviderInstanceId);
+    }
+
+    public bool CopyCardByIndex(int zeroBasedIndex)
+    {
+        if (zeroBasedIndex < 0 || zeroBasedIndex >= ServiceCards.Count)
+        {
+            return false;
+        }
+
+        var card = ServiceCards[zeroBasedIndex];
+        if (!card.HasText)
+        {
+            return false;
+        }
+
+        card.CopyResult();
+        return true;
+    }
+
+    public bool CopyFirstAvailableCard()
+    {
+        var first = ServiceCards.FirstOrDefault(c => c.HasText);
+        if (first is null)
+        {
+            return false;
+        }
+
+        first.CopyResult();
+        return true;
+    }
+
     public void CancelActiveTranslation()
     {
+        StopActiveSpeech();
+
+        if (_ocrRerunCts is not null)
+        {
+            try
+            {
+                _ocrRerunCts.Cancel();
+            }
+            catch
+            {
+                // Ignore cancellation race.
+            }
+
+            _ocrRerunCts.Dispose();
+            _ocrRerunCts = null;
+        }
+
         if (_activeTranslationCts is not null)
         {
             try
@@ -581,9 +1058,81 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
         _ = RetranslateAsync();
     }
 
+    partial void OnSelectedOcrPromptModeChanged(OcrPromptModeOption value)
+    {
+        if (_isSuppressingLanguageReaction || value is null)
+        {
+            return;
+        }
+
+        _ = PersistOcrPromptModeAndRerunAsync(value.Mode);
+    }
+
     partial void OnIsPinnedChanged(bool value)
     {
         PinStateChanged?.Invoke(this, value);
+    }
+
+    private async Task PersistOcrPromptModeAndRerunAsync(OcrPromptMode mode)
+    {
+        try
+        {
+            var updated = _settingsStore.Current.Clone();
+            updated.Ocr.PromptMode = mode;
+            _lastSettingOcrPromptMode = mode;
+            await _settingsStore.SaveAsync(updated);
+        }
+        catch (Exception ex)
+        {
+            AppDiagnosticsLogger.Warn("OCR", "Failed to save OCR prompt mode.", ex);
+        }
+
+        if (HasOcrContext && _lastOcrScreenshot is not null)
+        {
+            await RerunOcrAsync();
+        }
+    }
+
+    private async Task LoadOcrPreviewBitmapAsync(byte[] pngBytes)
+    {
+        try
+        {
+            using var stream = new InMemoryRandomAccessStream();
+            await stream.WriteAsync(pngBytes.AsBuffer());
+            stream.Seek(0);
+
+            var bitmap = new BitmapImage();
+            await bitmap.SetSourceAsync(stream);
+            OcrPreviewImage = bitmap;
+        }
+        catch (Exception ex)
+        {
+            AppDiagnosticsLogger.Warn("OCR", "Failed to decode OCR screenshot preview bitmap.", ex);
+        }
+    }
+
+    private void ClearOcrContext()
+    {
+        _lastOcrScreenshot = null;
+        HasOcrContext = false;
+        IsOcrPreviewExpanded = false;
+        OcrPreviewImage = null;
+    }
+
+    private void SyncOcrPromptModeFromSettings()
+    {
+        var ocrMode = _settingsStore.Current.Ocr?.PromptMode ?? OcrPromptMode.PlainText;
+        _isSuppressingLanguageReaction = true;
+        try
+        {
+            SelectedOcrPromptMode = OcrPromptModeOptions.FirstOrDefault(x => x.Mode == ocrMode)
+                ?? OcrPromptModeOptions[0];
+            _lastSettingOcrPromptMode = ocrMode;
+        }
+        finally
+        {
+            _isSuppressingLanguageReaction = false;
+        }
     }
 
     private async Task ExecuteTranslationAsync(string text, bool isFromOcr)
@@ -631,7 +1180,10 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
                 _textDiffService,
                 NotifyLayoutChanged,
                 showDiffByDefault: false,
-                dispatcher: _dispatcher)
+                dispatcher: _dispatcher,
+                writeBackCallback: id => WriteBackCardAsync(id),
+                toggleSpeakCallback: ToggleSpeakCardAsync,
+                hasSourceWindow: HasSourceWindow)
             {
                 DetectedSourceLanguage = routing.DetectedSourceLanguage,
                 TargetLanguage = routing.TargetLanguage,
@@ -666,7 +1218,8 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
                         return;
                     }
 
-                    if (cardsById.TryGetValue(update.ProviderInstanceId, out var card))
+                    cardsById.TryGetValue(update.ProviderInstanceId, out var card);
+                    if (card is not null)
                     {
                         card.ApplyUpdate(update);
 
@@ -690,8 +1243,14 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
                         settings.Window.AutoCopyFirstResult &&
                         !string.IsNullOrWhiteSpace(update.AccumulatedText))
                     {
-                        _autoCopiedInCurrentRun = true;
-                        AppAssetHelper.TryCopyTextToClipboard(update.AccumulatedText);
+                        if (ClipboardLoopGuard.TryCopyText(update.AccumulatedText))
+                        {
+                            _autoCopiedInCurrentRun = true;
+                            if (card is not null)
+                            {
+                                card.IsAutoCopied = true;
+                            }
+                        }
                     }
                 });
             }
@@ -743,7 +1302,10 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
                 _textDiffService,
                 NotifyLayoutChanged,
                 showDiffByDefault: showDiffByDefault,
-                dispatcher: _dispatcher)
+                dispatcher: _dispatcher,
+                writeBackCallback: id => WriteBackCardAsync(id),
+                toggleSpeakCallback: ToggleSpeakCardAsync,
+                hasSourceWindow: HasSourceWindow)
             {
                 DetectedSourceLanguage = detection.Language,
                 TargetLanguage = detection.Language,
@@ -773,10 +1335,8 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
                         return;
                     }
 
-                    if (cardsById.TryGetValue(update.ProviderInstanceId, out var card))
-                    {
-                        card.ApplyUpdate(update);
-                    }
+                    cardsById.TryGetValue(update.ProviderInstanceId, out var card);
+                    card?.ApplyUpdate(update);
 
                     if (update.DetectedSourceLanguage is { IsAuto: false } detected)
                     {
@@ -789,8 +1349,14 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
                         settings.Window.AutoCopyFirstResult &&
                         !string.IsNullOrWhiteSpace(update.AccumulatedText))
                     {
-                        _autoCopiedInCurrentRun = true;
-                        AppAssetHelper.TryCopyTextToClipboard(update.AccumulatedText);
+                        if (ClipboardLoopGuard.TryCopyText(update.AccumulatedText))
+                        {
+                            _autoCopiedInCurrentRun = true;
+                            if (card is not null)
+                            {
+                                card.IsAutoCopied = true;
+                            }
+                        }
                     }
                 });
             }

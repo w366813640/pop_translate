@@ -4,8 +4,8 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:winex="using:WinUIEx"
     Title="PopTranslate Hover"
-    Width="36"
-    Height="36"
+    Width="34"
+    Height="34"
     IsTitleBarVisible="False"
     IsResizable="False"
     IsMaximizable="False"
@@ -15,29 +15,109 @@
     <Grid
         x:Name="RootGrid"
         Background="Transparent"
+        PointerEntered="RootGrid_PointerEntered"
+        PointerExited="RootGrid_PointerExited"
         PreviewKeyDown="RootGrid_PreviewKeyDown">
-        <Button
-            x:Name="HoverButton"
-            HorizontalAlignment="Stretch"
-            VerticalAlignment="Stretch"
-            Padding="0"
+        <Border
+            x:Name="PillBorder"
             CornerRadius="8"
             BorderThickness="1"
             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-            Background="{ThemeResource AccentFillColorDefaultBrush}"
-            ToolTipService.ToolTip="点击翻译选中文本"
-            Click="HoverButton_Click"
-            PointerEntered="HoverButton_PointerEntered"
-            PointerExited="HoverButton_PointerExited">
+            Background="{ThemeResource AccentFillColorDefaultBrush}">
+            <Border.ContextFlyout>
+                <MenuFlyout
+                    x:Name="HoverContextFlyout"
+                    ShouldConstrainToRootBounds="False"
+                    Opening="HoverContextFlyout_Opening"
+                    Closed="HoverContextFlyout_Closed">
+                    <MenuFlyoutItem
+                        x:Name="BlacklistCurrentAppMenuItem"
+                        Text="屏蔽当前应用"
+                        Click="BlacklistCurrentAppMenuItem_Click">
+                        <MenuFlyoutItem.Icon>
+                            <FontIcon Glyph="&#xE8F8;" />
+                        </MenuFlyoutItem.Icon>
+                    </MenuFlyoutItem>
+                    <MenuFlyoutItem
+                        x:Name="MuteHover30MinMenuItem"
+                        Text="暂停划词 30 分钟"
+                        Click="MuteHover30MinMenuItem_Click">
+                        <MenuFlyoutItem.Icon>
+                            <FontIcon Glyph="&#xE769;" />
+                        </MenuFlyoutItem.Icon>
+                    </MenuFlyoutItem>
+                    <MenuFlyoutSeparator />
+                    <MenuFlyoutItem
+                        x:Name="DisableHoverIconMenuItem"
+                        Text="关闭悬浮图标"
+                        Click="DisableHoverIconMenuItem_Click">
+                        <MenuFlyoutItem.Icon>
+                            <FontIcon Glyph="&#xE711;" />
+                        </MenuFlyoutItem.Icon>
+                    </MenuFlyoutItem>
+                </MenuFlyout>
+            </Border.ContextFlyout>
+
             <Grid>
-                <TextBlock
-                    Text="译"
-                    FontSize="15"
-                    FontWeight="SemiBold"
-                    Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}"
-                    HorizontalAlignment="Center"
-                    VerticalAlignment="Center" />
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition x:Name="PolishColumn" Width="0" />
+                </Grid.ColumnDefinitions>
+
+                <Button
+                    x:Name="TranslateActionButton"
+                    Grid.Column="0"
+                    HorizontalAlignment="Stretch"
+                    VerticalAlignment="Stretch"
+                    Padding="0"
+                    CornerRadius="7"
+                    BorderThickness="0"
+                    Background="Transparent"
+                    AutomationProperties.Name="翻译选中文本"
+                    ToolTipService.ToolTip="翻译选中文本（右键管理划词）"
+                    Click="TranslateActionButton_Click">
+                    <TextBlock
+                        Text="译"
+                        FontSize="14"
+                        FontWeight="SemiBold"
+                        Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center" />
+                </Button>
+
+                <Border
+                    x:Name="ActionDivider"
+                    Grid.Column="1"
+                    Visibility="Collapsed"
+                    Width="1"
+                    Height="16"
+                    VerticalAlignment="Center"
+                    Opacity="0.35"
+                    Background="{ThemeResource TextOnAccentFillColorPrimaryBrush}" />
+
+                <Button
+                    x:Name="PolishActionButton"
+                    Grid.Column="2"
+                    Visibility="Collapsed"
+                    HorizontalAlignment="Stretch"
+                    VerticalAlignment="Stretch"
+                    Padding="0"
+                    CornerRadius="7"
+                    BorderThickness="0"
+                    Background="Transparent"
+                    AutomationProperties.Name="润色选中文本"
+                    ToolTipService.ToolTip="润色选中文本"
+                    Click="PolishActionButton_Click">
+                    <TextBlock
+                        Text="润"
+                        FontSize="14"
+                        FontWeight="SemiBold"
+                        Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center" />
+                </Button>
             </Grid>
-        </Button>
+        </Border>
     </Grid>
 </winex:WindowEx>

@@ -13,11 +13,14 @@ internal sealed class FrozenMonitorOverlayWindow : IDisposable
     private const uint WmPaint = 0x000F;
     private const uint WmSetCursor = 0x0020;
     private const uint WmKeyDown = 0x0100;
+    private const uint WmKeyUp = 0x0101;
+    private const uint WmSysKeyDown = 0x0104;
     private const uint WmMouseMove = 0x0200;
     private const uint WmLButtonDown = 0x0201;
     private const uint WmLButtonUp = 0x0202;
     private const uint WmRButtonUp = 0x0205;
     private const uint WmCaptureChanged = 0x0215;
+    private const nuint MkControlFlag = 0x0008;
 
     private const int MinSelectionSidePx = 8;
     private static readonly COLORREF AccentBlueColorRef = new(0x00D47800u); // #0078D4 (BBGGRR)
@@ -26,7 +29,7 @@ internal sealed class FrozenMonitorOverlayWindow : IDisposable
     private static readonly COLORREF WhiteColorRef = new(0x00FFFFFFu);
     private static readonly HWND HwndTopMost = new(-1);
 
-    private readonly Action<CapturedMonitorBitmap, ScreenRect> _onCompleted;
+    private readonly Action<CapturedMonitorBitmap, ScreenRect, bool> _onCompleted;
     private readonly Action _onCancelled;
     private readonly Action? _onPainted;
 
@@ -45,7 +48,7 @@ internal sealed class FrozenMonitorOverlayWindow : IDisposable
 
     public FrozenMonitorOverlayWindow(
         CapturedMonitorBitmap monitorBitmap,
-        Action<CapturedMonitorBitmap, ScreenRect> onCompleted,
+        Action<CapturedMonitorBitmap, ScreenRect, bool> onCompleted,
         Action onCancelled,
         Action? onPainted = null)
     {
@@ -158,15 +161,11 @@ internal sealed class FrozenMonitorOverlayWindow : IDisposable
                     _dragCurrent = ExtractClientPoint(lParam);
                     PInvoke.ReleaseCapture();
 
-                    var selection = ScreenCaptureGdi.NormalizeSelectionRect(
-                        _dragStart,
-                        _dragCurrent,
-                        MonitorBitmap.Width,
-                        MonitorBitmap.Height);
-
-                    if (selection.Width >= MinSelectionSidePx && selection.Height >= MinSelectionSidePx)
+                    var selection = GetCurrentSelectionRect();
+                    if (IsValidSelection(selection))
                     {
-                        _onCompleted(MonitorBitmap, selection);
+                        var copyOnly = (wParam.Value & MkControlFlag) != 0 || IsControlKeyDown();
+                        _onCompleted(MonitorBitmap, selection, copyOnly);
                     }
                     else
                     {
@@ -189,14 +188,26 @@ internal sealed class FrozenMonitorOverlayWindow : IDisposable
                 if (_isDragging)
                 {
                     _isDragging = false;
+                    var selection = GetCurrentSelectionRect();
                     PInvoke.ReleaseCapture();
+
+                    // Right-clicking while actively dragging a valid region (or holding Ctrl) completes as Copy-Only;
+                    // right-clicking without an active valid drag cancels as expected.
+                    if (IsValidSelection(selection))
+                    {
+                        _onCompleted(MonitorBitmap, selection, true);
+                        return new LRESULT(0);
+                    }
                 }
 
                 _onCancelled();
                 return new LRESULT(0);
 
             case WmKeyDown:
-                if ((VIRTUAL_KEY)wParam.Value == VIRTUAL_KEY.VK_ESCAPE)
+            case WmSysKeyDown:
+            {
+                var vk = (VIRTUAL_KEY)wParam.Value;
+                if (vk == VIRTUAL_KEY.VK_ESCAPE)
                 {
                     if (_isDragging)
                     {
@@ -208,7 +219,49 @@ internal sealed class FrozenMonitorOverlayWindow : IDisposable
                     return new LRESULT(0);
                 }
 
+                if (_isDragging && vk == VIRTUAL_KEY.VK_C)
+                {
+                    var selection = GetCurrentSelectionRect();
+                    if (IsValidSelection(selection))
+                    {
+                        _isDragging = false;
+                        PInvoke.ReleaseCapture();
+                        _onCompleted(MonitorBitmap, selection, true);
+                        return new LRESULT(0);
+                    }
+                }
+
+                if (_isDragging && vk == VIRTUAL_KEY.VK_RETURN)
+                {
+                    var selection = GetCurrentSelectionRect();
+                    if (IsValidSelection(selection))
+                    {
+                        var copyOnly = IsControlKeyDown();
+                        _isDragging = false;
+                        PInvoke.ReleaseCapture();
+                        _onCompleted(MonitorBitmap, selection, copyOnly);
+                        return new LRESULT(0);
+                    }
+                }
+
+                if (_isDragging && vk is VIRTUAL_KEY.VK_CONTROL or VIRTUAL_KEY.VK_LCONTROL or VIRTUAL_KEY.VK_RCONTROL)
+                {
+                    PInvoke.InvalidateRect(hwnd, (RECT*)null, false);
+                }
+
                 break;
+            }
+
+            case WmKeyUp:
+            {
+                var vk = (VIRTUAL_KEY)wParam.Value;
+                if (_isDragging && vk is VIRTUAL_KEY.VK_CONTROL or VIRTUAL_KEY.VK_LCONTROL or VIRTUAL_KEY.VK_RCONTROL)
+                {
+                    PInvoke.InvalidateRect(hwnd, (RECT*)null, false);
+                }
+
+                break;
+            }
         }
 
         return PInvoke.DefWindowProc(hwnd, msg, wParam, lParam);
@@ -277,6 +330,21 @@ internal sealed class FrozenMonitorOverlayWindow : IDisposable
         }
     }
 
+    private ScreenRect GetCurrentSelectionRect() =>
+        ScreenCaptureGdi.NormalizeSelectionRect(
+            _dragStart,
+            _dragCurrent,
+            MonitorBitmap.Width,
+            MonitorBitmap.Height);
+
+    private static bool IsValidSelection(ScreenRect selection) =>
+        selection.Width >= MinSelectionSidePx && selection.Height >= MinSelectionSidePx;
+
+    private static bool IsControlKeyDown() =>
+        (PInvoke.GetAsyncKeyState((int)VIRTUAL_KEY.VK_CONTROL) & 0x8000) != 0 ||
+        (PInvoke.GetAsyncKeyState((int)VIRTUAL_KEY.VK_LCONTROL) & 0x8000) != 0 ||
+        (PInvoke.GetAsyncKeyState((int)VIRTUAL_KEY.VK_RCONTROL) & 0x8000) != 0;
+
     private unsafe void InitializeGdiResources()
     {
         var windowDc = PInvoke.GetDC(Handle);
@@ -343,11 +411,7 @@ internal sealed class FrozenMonitorOverlayWindow : IDisposable
             // 2. If dragging, reveal crisp undimmed pixels inside selection + accent border + dimension badge.
             if (_isDragging)
             {
-                var selection = ScreenCaptureGdi.NormalizeSelectionRect(
-                    _dragStart,
-                    _dragCurrent,
-                    MonitorBitmap.Width,
-                    MonitorBitmap.Height);
+                var selection = GetCurrentSelectionRect();
 
                 if (selection.Width > 0 && selection.Height > 0)
                 {
@@ -440,7 +504,9 @@ internal sealed class FrozenMonitorOverlayWindow : IDisposable
         }
 
         var scale = MonitorBitmap.Monitor.DpiScale;
-        var label = $"{selection.Width} × {selection.Height}";
+        var label = IsControlKeyDown()
+            ? $"{selection.Width} × {selection.Height}  [仅复制 OCR]"
+            : $"{selection.Width} × {selection.Height}  (Ctrl+C 仅复制)";
         var padX = (int)Math.Round(8 * scale);
         var padY = (int)Math.Round(4 * scale);
         var margin = (int)Math.Round(8 * scale);

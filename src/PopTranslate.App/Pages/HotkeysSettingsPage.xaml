@@ -19,6 +19,7 @@
                 <TextBlock Text="全局快捷键" Style="{StaticResource BodyStrongTextBlockStyle}" VerticalAlignment="Center" />
                 <Button
                     Content="恢复默认快捷键"
+                    AutomationProperties.Name="恢复默认快捷键"
                     HorizontalAlignment="Right"
                     Padding="10,4"
                     FontSize="12"
@@ -101,6 +102,29 @@
                             <ColumnDefinition Width="260" />
                         </Grid.ColumnDefinitions>
                         <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="静默截图 OCR (仅复制文字)" FontWeight="SemiBold" />
+                            <TextBlock
+                                Text="冻结屏幕框选文字后直接执行 OCR 并写入剪贴板，不弹出翻译卡片（默认 Alt + Shift + S）"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                TextWrapping="Wrap" />
+                        </StackPanel>
+                        <controls:HotkeyRecorderBox
+                            Grid.Column="1"
+                            VerticalAlignment="Center"
+                            Gesture="{x:Bind ViewModel.SilentOcrGesture, Mode=OneWay}"
+                            ErrorMessage="{x:Bind ViewModel.SilentOcrHotkeyError, Mode=OneWay}"
+                            GestureChanged="SilentOcrHotkey_GestureChanged" />
+                    </Grid>
+
+                    <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="260" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
                             <TextBlock Text="划词润色快捷键" FontWeight="SemiBold" />
                             <TextBlock
                                 Text="读取当前选中文本并直接以润色模式弹出大模型并发流式润色（默认 Alt + P）"
@@ -114,6 +138,28 @@
                             Gesture="{x:Bind ViewModel.SelectionPolishGesture, Mode=OneWay}"
                             ErrorMessage="{x:Bind ViewModel.SelectionPolishHotkeyError, Mode=OneWay}"
                             GestureChanged="SelectionPolishHotkey_GestureChanged" />
+                    </Grid>
+
+                    <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="双击 Ctrl+C 触发划词翻译" FontWeight="SemiBold" />
+                            <TextBlock
+                                Text="选中文字后快速连续按两次 Ctrl+C（间隔 ≤ 420ms）即可直接弹出翻译，兼容特殊窗口环境"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                TextWrapping="Wrap" />
+                        </StackPanel>
+                        <ToggleSwitch
+                            Grid.Column="1"
+                            OnContent="开启"
+                            OffContent="关闭"
+                            IsOn="{x:Bind ViewModel.EnableDoubleTapCopy, Mode=TwoWay}" />
                     </Grid>
                 </StackPanel>
             </Border>
@@ -140,6 +186,28 @@
                             OnContent="开启"
                             OffContent="关闭"
                             IsOn="{x:Bind ViewModel.EnableHoverIcon, Mode=TwoWay}" />
+                    </Grid>
+
+                    <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="仅在按住 Ctrl 键划词时显示悬浮图标" FontWeight="SemiBold" />
+                            <TextBlock
+                                Text="开启后，鼠标拖选或双击文字时需同时按住 Ctrl 键才会弹出悬浮图标，杜绝代码编辑与网页浏览误触"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                TextWrapping="Wrap" />
+                        </StackPanel>
+                        <ToggleSwitch
+                            Grid.Column="1"
+                            OnContent="开启"
+                            OffContent="关闭"
+                            IsOn="{x:Bind ViewModel.RequireCtrlForHover, Mode=TwoWay}" />
                     </Grid>
 
                     <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
@@ -236,6 +304,7 @@
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <TextBox
                             Grid.Column="0"
@@ -246,10 +315,26 @@
                             Grid.Column="1"
                             Style="{StaticResource AccentButtonStyle}"
                             Content="添加进程"
+                            AutomationProperties.Name="添加进程"
                             Command="{x:Bind ViewModel.AddBlacklistProcessCommand}" />
                         <Button
                             Grid.Column="2"
+                            AutomationProperties.Name="从当前运行进程添加">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <TextBlock Text="从当前运行进程添加" />
+                                <FontIcon FontSize="10" Glyph="&#xE70D;" Opacity="0.8" VerticalAlignment="Center" />
+                            </StackPanel>
+                            <Button.Flyout>
+                                <MenuFlyout
+                                    x:Name="RunningProcessesFlyout"
+                                    Placement="BottomEdgeAlignedRight"
+                                    Opening="RunningProcessesFlyout_Opening" />
+                            </Button.Flyout>
+                        </Button>
+                        <Button
+                            Grid.Column="3"
                             Content="恢复默认黑名单"
+                            AutomationProperties.Name="恢复默认黑名单"
                             Command="{x:Bind ViewModel.ResetDefaultBlacklistCommand}" />
                     </Grid>
 
@@ -285,6 +370,7 @@
                                             Grid.Column="1"
                                             Style="{StaticResource PopTranslateMicroIconButtonStyle}"
                                             Tag="{x:Bind}"
+                                            AutomationProperties.Name="移除忽略进程"
                                             ToolTipService.ToolTip="移除"
                                             Click="RemoveBlacklistItem_Click">
                                             <FontIcon FontSize="10" Glyph="&#xE711;" />

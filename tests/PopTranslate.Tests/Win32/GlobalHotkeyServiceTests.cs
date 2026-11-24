@@ -42,15 +42,17 @@ public sealed class GlobalHotkeyServiceTests
             InputTranslate = HotkeyGesture.Empty,
             ScreenshotTranslate = HotkeyGesture.Empty,
             SelectionPolish = HotkeyGesture.Empty,
+            SilentOcr = HotkeyGesture.Empty,
         };
 
         var results = service.ApplyHotkeys(config);
 
-        Assert.Equal(4, results.Count);
+        Assert.Equal(5, results.Count);
         Assert.True(results[HotkeyAction.SelectionTranslate].Succeeded, results[HotkeyAction.SelectionTranslate].ErrorMessage);
         Assert.True(results[HotkeyAction.InputTranslate].Succeeded);
         Assert.True(results[HotkeyAction.ScreenshotTranslate].Succeeded);
         Assert.True(results[HotkeyAction.SelectionPolish].Succeeded);
+        Assert.True(results[HotkeyAction.SilentOcr].Succeeded);
 
         service.UnregisterAll();
 
@@ -72,10 +74,11 @@ public sealed class GlobalHotkeyServiceTests
             InputTranslate = HotkeyGesture.Empty,
             ScreenshotTranslate = HotkeyGesture.Empty,
             SelectionPolish = polishGesture,
+            SilentOcr = HotkeyGesture.Empty,
         };
 
         var resA = serviceA.ApplyHotkeys(config);
-        Assert.Equal(4, resA.Count);
+        Assert.Equal(5, resA.Count);
         Assert.True(resA[HotkeyAction.SelectionPolish].Succeeded, resA[HotkeyAction.SelectionPolish].ErrorMessage);
 
         // External Win32 conflict on SelectionPolish
@@ -91,10 +94,11 @@ public sealed class GlobalHotkeyServiceTests
             InputTranslate = HotkeyGesture.Empty,
             ScreenshotTranslate = HotkeyGesture.Empty,
             SelectionPolish = polishGesture,
+            SilentOcr = HotkeyGesture.Empty,
         };
 
         var dupResults = serviceA.ApplyHotkeys(duplicateConfig);
-        Assert.Equal(4, dupResults.Count);
+        Assert.Equal(5, dupResults.Count);
         Assert.True(dupResults[HotkeyAction.SelectionTranslate].Succeeded, dupResults[HotkeyAction.SelectionTranslate].ErrorMessage);
         Assert.False(dupResults[HotkeyAction.SelectionPolish].Succeeded);
         Assert.Contains("SelectionTranslate", dupResults[HotkeyAction.SelectionPolish].ErrorMessage ?? string.Empty);
@@ -111,11 +115,12 @@ public sealed class GlobalHotkeyServiceTests
             InputTranslate = sharedGesture,
             ScreenshotTranslate = HotkeyGesture.Empty,
             SelectionPolish = HotkeyGesture.Empty,
+            SilentOcr = HotkeyGesture.Empty,
         };
 
         var results = service.ApplyHotkeys(config);
 
-        Assert.Equal(4, results.Count);
+        Assert.Equal(5, results.Count);
         Assert.True(results[HotkeyAction.SelectionTranslate].Succeeded, results[HotkeyAction.SelectionTranslate].ErrorMessage);
         Assert.False(results[HotkeyAction.InputTranslate].Succeeded);
         Assert.False(string.IsNullOrWhiteSpace(results[HotkeyAction.InputTranslate].ErrorMessage));
@@ -133,6 +138,7 @@ public sealed class GlobalHotkeyServiceTests
             InputTranslate = HotkeyGesture.Empty,
             ScreenshotTranslate = HotkeyGesture.Empty,
             SelectionPolish = HotkeyGesture.Empty,
+            SilentOcr = HotkeyGesture.Empty,
         };
 
         var resA = serviceA.ApplyHotkeys(config);
@@ -153,6 +159,7 @@ public sealed class GlobalHotkeyServiceTests
             InputTranslate = HotkeyGesture.Empty,
             ScreenshotTranslate = HotkeyGesture.Empty,
             SelectionPolish = HotkeyGesture.Empty,
+            SilentOcr = HotkeyGesture.Empty,
         };
 
         var service1 = new GlobalHotkeyService();

@@ -1,13 +1,16 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.Extensions.DependencyInjection;
 using PopTranslate.Core.Contracts;
 using PopTranslate.Core.Models;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace PopTranslate.Core.Configuration;
 
 public sealed class JsonSettingsStore : ISettingsStore
 {
+    private const int MoveMaxAttempts = 3;
+    private static readonly TimeSpan MoveRetryDelay = TimeSpan.FromMilliseconds(25);
+
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
         WriteIndented = true,
@@ -45,6 +48,17 @@ public sealed class JsonSettingsStore : ISettingsStore
 
     public event EventHandler<AppSettings>? SettingsChanged;
 
+    public static bool IsPortableMode() =>
+        File.Exists(Path.Combine(AppContext.BaseDirectory, "portable"));
+
+    public static string GetDefaultSettingsPath() =>
+        IsPortableMode()
+            ? Path.Combine(AppContext.BaseDirectory, "data", "settings.json")
+            : Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "PopTranslate",
+                "settings.json");
+
     public async Task<AppSettings> LoadAsync(CancellationToken cancellationToken = default)
     {
         await _ioLock.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -63,7 +77,7 @@ public sealed class JsonSettingsStore : ISettingsStore
                     SettingsFilePath,
                     FileMode.Open,
                     FileAccess.Read,
-                    FileShare.Read,
+                    FileShare.ReadWrite,
                     bufferSize: 4096,
                     useAsync: true);
 
@@ -74,22 +88,27 @@ public sealed class JsonSettingsStore : ISettingsStore
 
                 if (loaded is null)
                 {
-                    TryBackupCorruptFile();
-                    var defaults = AppSettings.CreateDefault();
-                    Volatile.Write(ref _current, defaults);
-                    return defaults.Clone();
+                    return BackupCorruptAndRestoreDefaults();
                 }
 
+                SanitizeStructure(loaded);
                 SanitizeAndProtectSecrets(loaded);
                 Volatile.Write(ref _current, loaded);
                 return loaded.Clone();
             }
-            catch (JsonException)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                TryBackupCorruptFile();
-                var defaults = AppSettings.CreateDefault();
-                Volatile.Write(ref _current, defaults);
-                return defaults.Clone();
+                throw;
+            }
+            catch (Exception ex) when (
+                ex is JsonException
+                    or NotSupportedException
+                    or InvalidOperationException
+                    or NullReferenceException
+                    or ArgumentException
+                    or FormatException)
+            {
+                return BackupCorruptAndRestoreDefaults();
             }
         }
         finally
@@ -102,7 +121,9 @@ public sealed class JsonSettingsStore : ISettingsStore
     {
         ArgumentNullException.ThrowIfNull(settings);
 
+        SanitizeStructure(settings);
         var snapshot = settings.Clone();
+        SanitizeStructure(snapshot);
         SanitizeAndProtectSecrets(snapshot);
 
         await _ioLock.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -134,7 +155,7 @@ public sealed class JsonSettingsStore : ISettingsStore
                     stream.Flush(flushToDisk: true);
                 }
 
-                File.Move(tempPath, SettingsFilePath, overwrite: true);
+                await MoveWithRetryAsync(tempPath, SettingsFilePath, cancellationToken).ConfigureAwait(false);
             }
             catch
             {
@@ -150,6 +171,92 @@ public sealed class JsonSettingsStore : ISettingsStore
         }
 
         SettingsChanged?.Invoke(this, snapshot.Clone());
+    }
+
+    private AppSettings BackupCorruptAndRestoreDefaults()
+    {
+        TryBackupCorruptFile();
+        var defaults = AppSettings.CreateDefault();
+        Volatile.Write(ref _current, defaults);
+        return defaults.Clone();
+    }
+
+    private static async Task MoveWithRetryAsync(
+        string sourcePath,
+        string destinationPath,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                File.Move(sourcePath, destinationPath, overwrite: true);
+                return;
+            }
+            catch (IOException) when (attempt < MoveMaxAttempts)
+            {
+                await Task.Delay(MoveRetryDelay, cancellationToken).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private static void SanitizeStructure(AppSettings settings)
+    {
+        settings.Hotkeys ??= new HotkeyConfig();
+        settings.Hotkeys.SelectionTranslate ??= HotkeyConfig.DefaultSelectionTranslate;
+        settings.Hotkeys.InputTranslate ??= HotkeyConfig.DefaultInputTranslate;
+        settings.Hotkeys.ScreenshotTranslate ??= HotkeyConfig.DefaultScreenshotTranslate;
+        settings.Hotkeys.SelectionPolish ??= HotkeyConfig.DefaultSelectionPolish;
+        settings.Hotkeys.SilentOcr ??= HotkeyConfig.DefaultSilentOcr;
+
+        settings.Selection ??= new SelectionConfig();
+        settings.Selection.ProcessBlacklist ??= [.. SelectionConfig.DefaultProcessBlacklist];
+        settings.Selection.ProcessBlacklist.RemoveAll(static item => string.IsNullOrWhiteSpace(item));
+
+        settings.Ocr ??= new OcrConfig();
+        settings.Ocr.PreferredWindowsOcrLanguageTag ??= string.Empty;
+        settings.Ocr.VisionBaseUrl ??= "https://api.openai.com/v1";
+        settings.Ocr.VisionModel ??= "gpt-4o-mini";
+        settings.Ocr.VisionPrompt ??= OcrConfig.DefaultVisionOcrPrompt;
+
+        settings.Proxy ??= new ProxyConfig();
+        settings.Proxy.Host ??= "127.0.0.1";
+        settings.Proxy.Username ??= string.Empty;
+
+        settings.Window ??= new WindowBehaviorConfig();
+        settings.Polish ??= new PolishConfig();
+        settings.Polish.CustomPrompt ??= PolishConfig.DefaultCustomPrompt;
+
+        if (settings.Providers is null)
+        {
+            settings.Providers = AppSettings.CreateDefault().Providers;
+        }
+        else
+        {
+            settings.Providers.RemoveAll(static provider => provider is null);
+            foreach (var provider in settings.Providers)
+            {
+                provider.Id = string.IsNullOrWhiteSpace(provider.Id) ? Guid.NewGuid().ToString("N") : provider.Id;
+                provider.DisplayName ??= "Translation Service";
+                provider.BaseUrl ??= string.Empty;
+                provider.Model ??= string.Empty;
+                provider.SystemPrompt ??= ProviderInstanceConfig.DefaultOpenAiSystemPrompt;
+            }
+        }
+
+        if (settings.Glossary is null)
+        {
+            settings.Glossary = [];
+        }
+        else
+        {
+            settings.Glossary.RemoveAll(static entry => entry is null || string.IsNullOrWhiteSpace(entry.SourceTerm));
+            foreach (var entry in settings.Glossary)
+            {
+                entry.SourceTerm = entry.SourceTerm.Trim();
+                entry.TargetTerm = (entry.TargetTerm ?? string.Empty).Trim();
+            }
+        }
     }
 
     private void SanitizeAndProtectSecrets(AppSettings settings)
@@ -168,20 +275,6 @@ public sealed class JsonSettingsStore : ISettingsStore
         {
             settings.SecondaryTargetLanguage = LanguageCode.English;
         }
-
-        settings.Hotkeys ??= new HotkeyConfig();
-        settings.Hotkeys.SelectionTranslate ??= HotkeyConfig.DefaultSelectionTranslate;
-        settings.Hotkeys.InputTranslate ??= HotkeyConfig.DefaultInputTranslate;
-        settings.Hotkeys.ScreenshotTranslate ??= HotkeyConfig.DefaultScreenshotTranslate;
-        settings.Hotkeys.SelectionPolish ??= HotkeyConfig.DefaultSelectionPolish;
-        settings.Selection ??= new SelectionConfig();
-        settings.Selection.ProcessBlacklist ??= [.. SelectionConfig.DefaultProcessBlacklist];
-        settings.Ocr ??= new OcrConfig();
-        settings.Proxy ??= new ProxyConfig();
-        settings.Window ??= new WindowBehaviorConfig();
-        settings.Polish ??= new PolishConfig();
-        settings.Polish.CustomPrompt ??= PolishConfig.DefaultCustomPrompt;
-        settings.Providers ??= AppSettings.CreateDefault().Providers;
 
         foreach (var provider in settings.Providers)
         {
@@ -236,10 +329,4 @@ public sealed class JsonSettingsStore : ISettingsStore
             // Ignore cleanup errors.
         }
     }
-
-    private static string GetDefaultSettingsPath() =>
-        Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "PopTranslate",
-            "settings.json");
 }

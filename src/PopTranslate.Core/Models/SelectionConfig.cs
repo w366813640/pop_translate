@@ -33,6 +33,8 @@ public sealed class SelectionConfig
 
     public bool QuietModeInFullscreen { get; set; } = true;
 
+    public bool RequireCtrlForHover { get; set; } = false;
+
     public int HoverIconAutoDismissMs { get; set; } = 4000;
 
     public int MinDragDistancePixels { get; set; } = 12;
@@ -46,9 +48,10 @@ public sealed class SelectionConfig
         EnableHoverIcon = EnableHoverIcon,
         EnableClipboardFallback = EnableClipboardFallback,
         QuietModeInFullscreen = QuietModeInFullscreen,
+        RequireCtrlForHover = RequireCtrlForHover,
         HoverIconAutoDismissMs = HoverIconAutoDismissMs,
         MinDragDistancePixels = MinDragDistancePixels,
         ClipboardWaitTimeoutMs = ClipboardWaitTimeoutMs,
-        ProcessBlacklist = [.. ProcessBlacklist],
+        ProcessBlacklist = [.. (ProcessBlacklist ?? []).Where(p => p is not null)],
     };
 }

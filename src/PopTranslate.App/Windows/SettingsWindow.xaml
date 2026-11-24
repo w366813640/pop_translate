@@ -28,7 +28,7 @@
                     CornerRadius="5"
                     Background="{ThemeResource AccentFillColorDefaultBrush}">
                     <TextBlock
-                        Text="B"
+                        Text="P"
                         FontSize="12"
                         FontWeight="Bold"
                         Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}"

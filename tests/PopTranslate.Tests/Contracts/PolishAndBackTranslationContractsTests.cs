@@ -61,7 +61,8 @@ public sealed class PolishAndBackTranslationContractsTests
         Assert.Equal(3, (int)PolishStyle.Casual);
         Assert.Equal(4, (int)PolishStyle.Concise);
         Assert.Equal(5, (int)PolishStyle.Custom);
-        Assert.Equal(6, Enum.GetValues<PolishStyle>().Length);
+        Assert.Equal(6, (int)PolishStyle.CodeNaming);
+        Assert.Equal(7, Enum.GetValues<PolishStyle>().Length);
 
         Assert.Equal(0, (int)DiffOperation.Equal);
         Assert.Equal(1, (int)DiffOperation.Delete);

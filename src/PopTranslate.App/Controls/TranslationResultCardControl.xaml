@@ -57,13 +57,24 @@
                         Text="{x:Bind ViewModel.DisplayName, Mode=OneWay}" />
                 </Grid>
 
-                <!-- Status / Latency -->
+                <!-- Auto-Copy Badge + Status / Latency -->
                 <StackPanel
                     Grid.Column="1"
                     Orientation="Horizontal"
                     Spacing="5"
                     HorizontalAlignment="Right"
                     VerticalAlignment="Center">
+                    <Border
+                        Visibility="{x:Bind ViewModel.IsAutoCopied, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                        Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+                        CornerRadius="4"
+                        Padding="5,1"
+                        VerticalAlignment="Center">
+                        <TextBlock
+                            FontSize="10"
+                            Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                            Text="已自动复制" />
+                    </Border>
                     <ProgressRing
                         Width="14"
                         Height="14"
@@ -78,12 +89,27 @@
 
                 <!-- Action Micro-Buttons -->
                 <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
+                    <!-- One-Click Write-Back (Replace Selected Text in Source Window) -->
+                    <Button
+                        Style="{StaticResource PopTranslateMicroChipButtonStyle}"
+                        Visibility="{x:Bind ViewModel.ShowWriteBackButton, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                        Command="{x:Bind ViewModel.WriteBackCommand, Mode=OneWay}"
+                        IsEnabled="{x:Bind ViewModel.CanWriteBack, Mode=OneWay}"
+                        AutomationProperties.Name="回填替换原文"
+                        ToolTipService.ToolTip="{x:Bind ViewModel.WriteBackTooltip, Mode=OneWay}">
+                        <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                            <FontIcon FontSize="11" Glyph="{x:Bind ViewModel.WriteBackGlyph, Mode=OneWay}" />
+                            <TextBlock FontSize="11" Text="回填" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+
                     <!-- Translate Mode: Back-Translation Trigger -->
                     <Button
                         Style="{StaticResource PopTranslateMicroChipButtonStyle}"
                         Visibility="{x:Bind ViewModel.IsTranslateMode, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
                         Command="{x:Bind ViewModel.BackTranslateCommand, Mode=OneWay}"
                         IsEnabled="{x:Bind ViewModel.CanBackTranslate, Mode=OneWay}"
+                        AutomationProperties.Name="回译验证语义"
                         ToolTipService.ToolTip="回译验证语义">
                         <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
                             <FontIcon FontSize="11" Glyph="&#xE8AB;" />
@@ -97,6 +123,7 @@
                         Visibility="{x:Bind ViewModel.IsPolishMode, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
                         IsChecked="{x:Bind ViewModel.ShowDiff, Mode=TwoWay}"
                         IsEnabled="{x:Bind ViewModel.CanToggleDiff, Mode=OneWay}"
+                        AutomationProperties.Name="对比原文修改差异"
                         ToolTipService.ToolTip="对比原文修改差异（本地计算，不消耗 Token）">
                         <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
                             <FontIcon FontSize="11" Glyph="&#xE8A1;" />
@@ -104,9 +131,20 @@
                         </StackPanel>
                     </ToggleButton>
 
+                    <!-- TTS Speaker -->
+                    <Button
+                        Style="{StaticResource PopTranslateMicroIconButtonStyle}"
+                        Command="{x:Bind ViewModel.ToggleSpeakCommand, Mode=OneWay}"
+                        IsEnabled="{x:Bind ViewModel.HasText, Mode=OneWay}"
+                        AutomationProperties.Name="朗读结果"
+                        ToolTipService.ToolTip="{x:Bind ViewModel.SpeakTooltip, Mode=OneWay}">
+                        <FontIcon FontSize="12" Glyph="{x:Bind ViewModel.SpeakGlyph, Mode=OneWay}" />
+                    </Button>
+
                     <Button
                         Style="{StaticResource PopTranslateMicroIconButtonStyle}"
                         Command="{x:Bind ViewModel.RetryCommand, Mode=OneWay}"
+                        AutomationProperties.Name="重新执行"
                         ToolTipService.ToolTip="{x:Bind ViewModel.RetryTooltip, Mode=OneWay}">
                         <FontIcon FontSize="12" Glyph="&#xE72C;" />
                     </Button>
@@ -115,6 +153,7 @@
                         Style="{StaticResource PopTranslateMicroIconButtonStyle}"
                         Command="{x:Bind ViewModel.CopyResultCommand, Mode=OneWay}"
                         IsEnabled="{x:Bind ViewModel.HasText, Mode=OneWay}"
+                        AutomationProperties.Name="复制结果"
                         ToolTipService.ToolTip="{x:Bind ViewModel.CopyTooltip, Mode=OneWay}">
                         <FontIcon FontSize="12" Glyph="{x:Bind ViewModel.CopyGlyph, Mode=OneWay}" />
                     </Button>
@@ -122,6 +161,7 @@
                     <Button
                         Style="{StaticResource PopTranslateMicroIconButtonStyle}"
                         Command="{x:Bind ViewModel.ToggleCollapseCommand, Mode=OneWay}"
+                        AutomationProperties.Name="折叠或展开卡片"
                         ToolTipService.ToolTip="折叠 / 展开">
                         <FontIcon FontSize="11" Glyph="{x:Bind ViewModel.ChevronGlyph, Mode=OneWay}" />
                     </Button>
@@ -172,18 +212,19 @@
                             Padding="8,3"
                             FontSize="12"
                             VerticalAlignment="Center"
+                            AutomationProperties.Name="重试此服务"
                             Command="{x:Bind ViewModel.RetryCommand, Mode=OneWay}" />
                     </Grid>
                 </Border>
 
-                <!-- Streaming Placeholder -->
+                <!-- Streaming / Reasoning Placeholder -->
                 <TextBlock
                     Visibility="{x:Bind ViewModel.ShowStreamingPlaceholder, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
                     FontSize="13"
                     Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                     Text="{x:Bind ViewModel.StreamingPlaceholderText, Mode=OneWay}" />
 
-                <!-- Plain Result Text (Live Streaming) -->
+                <!-- Plain Result Text (Live Streaming or Plain Prose) -->
                 <TextBlock
                     Visibility="{x:Bind ViewModel.ShowPlainText, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
                     FontSize="14"
@@ -193,7 +234,17 @@
                     Foreground="{ThemeResource TextFillColorPrimaryBrush}"
                     Text="{x:Bind ViewModel.TranslatedText, Mode=OneWay}" />
 
-                <!-- Polish Local Diff View (RichTextBlock + TextHighlighter) -->
+                <!-- Native Formatted Result Text (Inline `code`, fenced ```code```, and **bold**) -->
+                <RichTextBlock
+                    x:Name="FormattedRichTextBlock"
+                    Visibility="{x:Bind ViewModel.ShowFormattedMarkdown, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                    FontSize="14"
+                    LineHeight="22"
+                    TextWrapping="Wrap"
+                    IsTextSelectionEnabled="True"
+                    Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+
+                <!-- Polish Local Diff View (RichTextBlock + TextHighlighter, rendered once Completed) -->
                 <RichTextBlock
                     x:Name="DiffRichTextBlock"
                     Visibility="{x:Bind ViewModel.ShowDiffText, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
@@ -263,6 +314,7 @@
                                     Width="24"
                                     Height="24"
                                     Command="{x:Bind ViewModel.BackTranslateCommand, Mode=OneWay}"
+                                    AutomationProperties.Name="重新回译"
                                     ToolTipService.ToolTip="重新回译">
                                     <FontIcon FontSize="11" Glyph="&#xE72C;" />
                                 </Button>
@@ -272,6 +324,7 @@
                                     Height="24"
                                     Command="{x:Bind ViewModel.CopyBackTranslationCommand, Mode=OneWay}"
                                     IsEnabled="{x:Bind ViewModel.HasBackTranslatedText, Mode=OneWay}"
+                                    AutomationProperties.Name="复制回译结果"
                                     ToolTipService.ToolTip="{x:Bind ViewModel.BackTranslateCopyTooltip, Mode=OneWay}">
                                     <FontIcon FontSize="11" Glyph="{x:Bind ViewModel.BackTranslateCopyGlyph, Mode=OneWay}" />
                                 </Button>
@@ -280,6 +333,7 @@
                                     Width="24"
                                     Height="24"
                                     Command="{x:Bind ViewModel.DismissBackTranslationCommand, Mode=OneWay}"
+                                    AutomationProperties.Name="收起回译"
                                     ToolTipService.ToolTip="收起回译">
                                     <FontIcon FontSize="10" Glyph="&#xE711;" />
                                 </Button>
@@ -312,6 +366,7 @@
                                     Padding="7,2"
                                     FontSize="11"
                                     VerticalAlignment="Center"
+                                    AutomationProperties.Name="重试回译"
                                     Command="{x:Bind ViewModel.BackTranslateCommand, Mode=OneWay}" />
                             </Grid>
                         </Border>

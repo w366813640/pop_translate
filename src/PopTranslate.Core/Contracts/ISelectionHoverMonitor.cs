@@ -10,9 +10,13 @@ public interface ISelectionHoverMonitor : IDisposable
 
     event EventHandler? DismissRequested;
 
+    event EventHandler<nint>? DoubleTapCopyDetected;
+
     void Start(SelectionConfig config);
 
     void UpdateConfig(SelectionConfig config);
+
+    void SetDoubleTapCopyEnabled(bool enabled);
 
     void Stop();
 

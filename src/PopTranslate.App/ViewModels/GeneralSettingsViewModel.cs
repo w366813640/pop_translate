@@ -12,6 +12,7 @@ public sealed partial class GeneralSettingsViewModel : ObservableObject
     private readonly IStartupPrivilegeService _startupPrivilegeService;
     private CancellationTokenSource? _promptSaveDebounceCts;
     private bool _isLoading;
+    private bool _isDirty;
 
     public GeneralSettingsViewModel(
         ISettingsStore settingsStore,
@@ -29,6 +30,8 @@ public sealed partial class GeneralSettingsViewModel : ObservableObject
         DefaultPolishStyle = PolishStyles[0];
     }
 
+    public event EventHandler<bool>? StandardStartupToggled;
+
     public ObservableCollection<LanguageOption> TargetLanguages { get; }
 
     public ObservableCollection<PolishStyleOption> PolishStyles { get; }
@@ -44,6 +47,15 @@ public sealed partial class GeneralSettingsViewModel : ObservableObject
 
     [ObservableProperty]
     public partial bool AutoBackTranslate { get; set; }
+
+    [ObservableProperty]
+    public partial bool EnableSingleWordDictionary { get; set; } = true;
+
+    [ObservableProperty]
+    public partial bool EnableCodeIdentifierSplit { get; set; } = true;
+
+    [ObservableProperty]
+    public partial string GlossaryText { get; set; } = string.Empty;
 
     [ObservableProperty]
     public partial PolishStyleOption DefaultPolishStyle { get; set; }
@@ -98,6 +110,9 @@ public sealed partial class GeneralSettingsViewModel : ObservableObject
 
             MergePdfLineBreaks = settings.MergePdfLineBreaks;
             AutoBackTranslate = settings.AutoBackTranslate;
+            EnableSingleWordDictionary = settings.EnableSingleWordDictionary;
+            EnableCodeIdentifierSplit = settings.EnableCodeIdentifierSplit;
+            GlossaryText = FormatGlossaryText(settings.Glossary);
 
             var polish = settings.Polish ?? new PolishConfig();
             DefaultPolishStyle = PolishStyles.FirstOrDefault(x => x.Style == polish.DefaultStyle)
@@ -125,12 +140,37 @@ public sealed partial class GeneralSettingsViewModel : ObservableObject
                 LaunchAtStartup = settings.LaunchAtStartup;
             }
 
+            _isDirty = false;
             StatusMessage = null;
         }
         finally
         {
             _isLoading = false;
         }
+    }
+
+    public void SyncStandardStartupFromExternal(bool enabled)
+    {
+        _isLoading = true;
+        try
+        {
+            LaunchAtStartup = enabled;
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    public async Task FlushIfDirtyAsync()
+    {
+        if (!_isDirty || _isLoading)
+        {
+            return;
+        }
+
+        CancelPromptDebounce();
+        await PersistAsync();
     }
 
     [RelayCommand]
@@ -155,6 +195,8 @@ public sealed partial class GeneralSettingsViewModel : ObservableObject
     partial void OnSecondaryTargetLanguageChanged(LanguageOption value) => SaveIfReady();
     partial void OnMergePdfLineBreaksChanged(bool value) => SaveIfReady();
     partial void OnAutoBackTranslateChanged(bool value) => SaveIfReady();
+    partial void OnEnableSingleWordDictionaryChanged(bool value) => SaveIfReady();
+    partial void OnEnableCodeIdentifierSplitChanged(bool value) => SaveIfReady();
     partial void OnDefaultPolishStyleChanged(PolishStyleOption value) => SaveIfReady();
     partial void OnShowPolishDiffByDefaultChanged(bool value) => SaveIfReady();
     partial void OnPositionModeIndexChanged(int value) => SaveIfReady();
@@ -166,18 +208,9 @@ public sealed partial class GeneralSettingsViewModel : ObservableObject
     partial void OnAutoCopyFirstResultChanged(bool value) => SaveIfReady();
     partial void OnThemeModeIndexChanged(int value) => SaveIfReady();
 
-    partial void OnCustomPolishPromptChanged(string value)
-    {
-        if (_isLoading)
-        {
-            return;
-        }
+    partial void OnGlossaryTextChanged(string value) => ScheduleDebouncedSave();
 
-        CancelPromptDebounce();
-        var cts = new CancellationTokenSource();
-        _promptSaveDebounceCts = cts;
-        _ = PersistDebouncedAsync(cts.Token);
-    }
+    partial void OnCustomPolishPromptChanged(string value) => ScheduleDebouncedSave();
 
     partial void OnLaunchAtStartupChanged(bool value)
     {
@@ -194,13 +227,40 @@ public sealed partial class GeneralSettingsViewModel : ObservableObject
                 _startupPrivilegeService.SetStandardStartup(value, exePath);
             }
 
-            StatusMessage = value ? "已启用当前用户开机自启。" : "已关闭当前用户开机自启。";
+            StandardStartupToggled?.Invoke(this, value);
+            StatusMessage = value
+                ? "已启用当前用户开机自启（提权任务计划已同步互斥关闭）。"
+                : "已关闭当前用户开机自启。";
             SaveIfReady();
         }
         catch (Exception ex)
         {
+            _isLoading = true;
+            try
+            {
+                LaunchAtStartup = !value;
+            }
+            finally
+            {
+                _isLoading = false;
+            }
+
             StatusMessage = $"设置开机自启失败：{ex.Message}";
         }
+    }
+
+    private void ScheduleDebouncedSave()
+    {
+        if (_isLoading)
+        {
+            return;
+        }
+
+        _isDirty = true;
+        CancelPromptDebounce();
+        var cts = new CancellationTokenSource();
+        _promptSaveDebounceCts = cts;
+        _ = PersistDebouncedAsync(cts.Token);
     }
 
     private void SaveIfReady()
@@ -257,7 +317,14 @@ public sealed partial class GeneralSettingsViewModel : ObservableObject
             updated.SecondaryTargetLanguage = SecondaryTargetLanguage.Code;
             updated.MergePdfLineBreaks = MergePdfLineBreaks;
             updated.AutoBackTranslate = AutoBackTranslate;
+            updated.EnableSingleWordDictionary = EnableSingleWordDictionary;
+            updated.EnableCodeIdentifierSplit = EnableCodeIdentifierSplit;
+            updated.Glossary = ParseGlossaryText(GlossaryText);
             updated.LaunchAtStartup = LaunchAtStartup;
+            if (LaunchAtStartup)
+            {
+                updated.UseElevatedStartupTask = false;
+            }
 
             updated.Polish ??= new PolishConfig();
             updated.Polish.DefaultStyle = DefaultPolishStyle?.Style ?? PolishStyle.General;
@@ -283,10 +350,74 @@ public sealed partial class GeneralSettingsViewModel : ObservableObject
             };
 
             await _settingsStore.SaveAsync(updated);
+            _isDirty = false;
         }
         catch (Exception ex)
         {
             StatusMessage = $"保存常规设置失败：{ex.Message}";
         }
+    }
+
+    private static string FormatGlossaryText(IReadOnlyList<GlossaryEntry>? glossary)
+    {
+        if (glossary is null || glossary.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        return string.Join(
+            Environment.NewLine,
+            glossary
+                .Where(g => g is not null && !string.IsNullOrWhiteSpace(g.SourceTerm) && !string.IsNullOrWhiteSpace(g.TargetTerm))
+                .Select(g => $"{g.SourceTerm.Trim()} = {g.TargetTerm.Trim()}"));
+    }
+
+    private static List<GlossaryEntry> ParseGlossaryText(string? rawText)
+    {
+        var entries = new List<GlossaryEntry>();
+        if (string.IsNullOrWhiteSpace(rawText))
+        {
+            return entries;
+        }
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var lines = rawText.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
+        foreach (var rawLine in lines)
+        {
+            var line = rawLine.Trim();
+            if (line.Length == 0 || line.StartsWith('#') || line.StartsWith("//", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var sepIndex = line.IndexOf('=');
+            if (sepIndex < 0)
+            {
+                sepIndex = line.IndexOf('＝');
+            }
+
+            if (sepIndex <= 0 || sepIndex >= line.Length - 1)
+            {
+                continue;
+            }
+
+            var source = line[..sepIndex].Trim();
+            var target = line[(sepIndex + 1)..].Trim();
+            if (source.Length == 0 || target.Length == 0)
+            {
+                continue;
+            }
+
+            if (seen.Add(source))
+            {
+                entries.Add(new GlossaryEntry
+                {
+                    SourceTerm = source,
+                    TargetTerm = target,
+                });
+            }
+        }
+
+        return entries;
     }
 }

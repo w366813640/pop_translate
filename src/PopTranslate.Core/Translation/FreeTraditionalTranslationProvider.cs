@@ -11,10 +11,23 @@ namespace PopTranslate.Core.Translation;
 
 public sealed class FreeTraditionalTranslationProvider : ITranslationProvider
 {
-    private const string GoogleEndpoint = "https://translate.googleapis.com/translate_a/single";
+    private const string BrowserUserAgent =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
+    private const string GoogleClients5TranslateEndpoint = "https://clients5.google.com/translate_a/t";
+    private const string GoogleApisTranslateEndpoint = "https://translate.googleapis.com/translate_a/t";
+    private const string GoogleApisSingleEndpoint = "https://translate.googleapis.com/translate_a/single";
     private const string BingAuthEndpoint = "https://edge.microsoft.com/translate/auth";
     private const string BingTranslateEndpoint = "https://api-edge.cognitive.microsofttranslator.com/translate";
     private static readonly TimeSpan BingTokenTtl = TimeSpan.FromMinutes(8);
+
+    private static readonly GoogleEndpointSpec[] DefaultGoogleEndpoints =
+    [
+        new(GoogleClients5TranslateEndpoint, Client: "dict-chrome-ex", IncludeDtParam: false),
+        new(GoogleApisTranslateEndpoint, Client: "dict-chrome-ex", IncludeDtParam: false),
+        new(GoogleApisSingleEndpoint, Client: "dict-chrome-ex", IncludeDtParam: true),
+        new(GoogleApisSingleEndpoint, Client: "gtx", IncludeDtParam: true),
+    ];
 
     private readonly IProxyHttpClientFactory _httpClientFactory;
     private readonly SemaphoreSlim _bingTokenLock = new(1, 1);
@@ -86,26 +99,53 @@ public sealed class FreeTraditionalTranslationProvider : ITranslationProvider
         }
 
         var timeoutSeconds = Math.Clamp(config.TimeoutSeconds <= 0 ? 15 : config.TimeoutSeconds, 5, 120);
-        using var httpClient = _httpClientFactory.CreateClient(timeout: TimeSpan.FromSeconds(timeoutSeconds));
+        var totalTimeout = TimeSpan.FromSeconds(timeoutSeconds);
 
-        EngineOutcome outcome = config.FreeEngine switch
+        HttpClient? httpClient = null;
+        try
         {
-            FreeTranslatorEngine.Google => await TranslateWithGoogleAsync(httpClient, request, cancellationToken).ConfigureAwait(false),
-            FreeTranslatorEngine.Bing => await TranslateWithBingAsync(httpClient, request, cancellationToken).ConfigureAwait(false),
-            _ => await TranslateWithAutoFallbackAsync(httpClient, request, cancellationToken).ConfigureAwait(false),
-        };
+            httpClient = _httpClientFactory.CreateClient(timeout: totalTimeout);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            return new TranslationResult(
+                ProviderInstanceId: config.Id,
+                ProviderDisplayName: config.DisplayName,
+                ProviderKind: Kind,
+                TranslatedText: string.Empty,
+                DetectedSourceLanguage: null,
+                TargetLanguage: request.TargetLanguage,
+                IsSuccess: false,
+                ErrorMessage: $"Failed to initialize HTTP client: {ex.Message}",
+                Elapsed: sw.Elapsed);
+        }
 
-        sw.Stop();
-        return new TranslationResult(
-            ProviderInstanceId: config.Id,
-            ProviderDisplayName: config.DisplayName,
-            ProviderKind: Kind,
-            TranslatedText: outcome.Text,
-            DetectedSourceLanguage: outcome.DetectedLanguage,
-            TargetLanguage: request.TargetLanguage,
-            IsSuccess: outcome.IsSuccess,
-            ErrorMessage: outcome.ErrorMessage,
-            Elapsed: sw.Elapsed);
+        using (httpClient)
+        {
+            EngineOutcome outcome = config.FreeEngine switch
+            {
+                FreeTranslatorEngine.Google => await TranslateWithGoogleAsync(httpClient, request, config, totalTimeout, cancellationToken).ConfigureAwait(false),
+                FreeTranslatorEngine.Bing => await TranslateWithBingAsync(httpClient, request, cancellationToken).ConfigureAwait(false),
+                _ => await TranslateWithAutoFallbackAsync(httpClient, request, config, totalTimeout, cancellationToken).ConfigureAwait(false),
+            };
+
+            sw.Stop();
+            return new TranslationResult(
+                ProviderInstanceId: config.Id,
+                ProviderDisplayName: config.DisplayName,
+                ProviderKind: Kind,
+                TranslatedText: outcome.Text,
+                DetectedSourceLanguage: outcome.DetectedLanguage,
+                TargetLanguage: request.TargetLanguage,
+                IsSuccess: outcome.IsSuccess,
+                ErrorMessage: outcome.ErrorMessage,
+                Elapsed: sw.Elapsed);
+        }
     }
 
     public async Task<ProviderHealthCheckResult> TestConnectionAsync(
@@ -162,9 +202,11 @@ public sealed class FreeTraditionalTranslationProvider : ITranslationProvider
     private async Task<EngineOutcome> TranslateWithAutoFallbackAsync(
         HttpClient httpClient,
         TranslationRequest request,
+        ProviderInstanceConfig config,
+        TimeSpan totalTimeout,
         CancellationToken cancellationToken)
     {
-        var google = await TranslateWithGoogleAsync(httpClient, request, cancellationToken).ConfigureAwait(false);
+        var google = await TranslateWithGoogleAsync(httpClient, request, config, totalTimeout, cancellationToken).ConfigureAwait(false);
         if (google.IsSuccess)
         {
             return google;
@@ -182,32 +224,102 @@ public sealed class FreeTraditionalTranslationProvider : ITranslationProvider
     private static async Task<EngineOutcome> TranslateWithGoogleAsync(
         HttpClient httpClient,
         TranslationRequest request,
+        ProviderInstanceConfig config,
+        TimeSpan totalTimeout,
         CancellationToken cancellationToken)
     {
+        if (!TryResolveGoogleEndpoints(config.BaseUrl, out var endpoints, out var validationError))
+        {
+            return EngineOutcome.Failure(validationError!);
+        }
+
         var sl = MapGoogleLanguageCode(request.SourceLanguage);
         var tl = MapGoogleLanguageCode(request.TargetLanguage.IsAuto ? LanguageCode.ChineseSimplified : request.TargetLanguage);
+        var deadline = Stopwatch.StartNew();
+        string? lastError = null;
+
+        for (var i = 0; i < endpoints.Count; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var remaining = totalTimeout - deadline.Elapsed;
+            if (remaining <= TimeSpan.FromMilliseconds(250))
+            {
+                return EngineOutcome.Failure(lastError ?? "Google Translate request timed out.");
+            }
+
+            var isLast = i == endpoints.Count - 1;
+            var attemptTimeout = isLast
+                ? remaining
+                : TimeSpan.FromSeconds(Math.Min(remaining.TotalSeconds, Math.Clamp(totalTimeout.TotalSeconds / 2.0, 4.0, 8.0)));
+
+            var outcome = await TryTranslateWithGoogleEndpointAsync(
+                httpClient,
+                endpoints[i],
+                sl,
+                tl,
+                request,
+                attemptTimeout,
+                cancellationToken).ConfigureAwait(false);
+
+            if (outcome.IsSuccess)
+            {
+                return outcome;
+            }
+
+            lastError = outcome.ErrorMessage;
+        }
+
+        return EngineOutcome.Failure(lastError ?? "Google Translate failed across all endpoints.");
+    }
+
+    private static async Task<EngineOutcome> TryTranslateWithGoogleEndpointAsync(
+        HttpClient httpClient,
+        GoogleEndpointSpec endpoint,
+        string sourceLang,
+        string targetLang,
+        TranslationRequest request,
+        TimeSpan attemptTimeout,
+        CancellationToken cancellationToken)
+    {
+        var queryBuilder = new StringBuilder();
+        queryBuilder.Append("client=").Append(Uri.EscapeDataString(endpoint.Client));
+        queryBuilder.Append("&sl=").Append(Uri.EscapeDataString(sourceLang));
+        queryBuilder.Append("&tl=").Append(Uri.EscapeDataString(targetLang));
+        if (endpoint.IncludeDtParam)
+        {
+            queryBuilder.Append("&dt=t");
+        }
+
+        var separator = endpoint.BaseEndpoint.Contains('?', StringComparison.Ordinal) ? "&" : "?";
+        var useGet = request.Text.Length <= 1500 && Encoding.UTF8.GetByteCount(request.Text) <= 1800;
+        var requestUrl = useGet
+            ? $"{endpoint.BaseEndpoint}{separator}{queryBuilder}&q={Uri.EscapeDataString(request.Text)}"
+            : $"{endpoint.BaseEndpoint}{separator}{queryBuilder}";
+
+        using var httpRequest = useGet
+            ? new HttpRequestMessage(HttpMethod.Get, requestUrl)
+            : new HttpRequestMessage(HttpMethod.Post, requestUrl)
+            {
+                Content = new FormUrlEncodedContent([new KeyValuePair<string, string>("q", request.Text)]),
+            };
+
+        httpRequest.Headers.TryAddWithoutValidation("User-Agent", BrowserUserAgent);
+        httpRequest.Headers.TryAddWithoutValidation("Accept", "application/json, text/plain, */*");
+
+        using var attemptCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        attemptCts.CancelAfter(attemptTimeout);
 
         try
         {
-            using var httpRequest = request.Text.Length <= 1500
-                ? new HttpRequestMessage(
-                    HttpMethod.Get,
-                    $"{GoogleEndpoint}?client=gtx&sl={Uri.EscapeDataString(sl)}&tl={Uri.EscapeDataString(tl)}&dt=t&q={Uri.EscapeDataString(request.Text)}")
-                : new HttpRequestMessage(
-                    HttpMethod.Post,
-                    $"{GoogleEndpoint}?client=gtx&sl={Uri.EscapeDataString(sl)}&tl={Uri.EscapeDataString(tl)}&dt=t")
-                {
-                    Content = new FormUrlEncodedContent([new KeyValuePair<string, string>("q", request.Text)]),
-                };
-
-            using var response = await httpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
+            using var response = await httpClient.SendAsync(httpRequest, attemptCts.Token).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
                 return EngineOutcome.Failure($"Google Translate HTTP {(int)response.StatusCode}");
             }
 
-            var json = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-            return ParseGoogleResponse(json);
+            var body = await response.Content.ReadAsStringAsync(attemptCts.Token).ConfigureAwait(false);
+            return ParseGoogleResponse(body, request.SourceLanguage);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -223,50 +335,196 @@ public sealed class FreeTraditionalTranslationProvider : ITranslationProvider
         }
     }
 
-    private static EngineOutcome ParseGoogleResponse(string json)
+    private static bool TryResolveGoogleEndpoints(
+        string? customBaseUrl,
+        out IReadOnlyList<GoogleEndpointSpec> endpoints,
+        out string? error)
     {
+        if (string.IsNullOrWhiteSpace(customBaseUrl))
+        {
+            endpoints = DefaultGoogleEndpoints;
+            error = null;
+            return true;
+        }
+
+        var trimmed = customBaseUrl.Trim();
+        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri) ||
+            (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+        {
+            endpoints = [];
+            error = $"Invalid Google Base URL '{customBaseUrl}'. Expected an http:// or https:// URL.";
+            return false;
+        }
+
+        var normalized = trimmed.TrimEnd('/');
+        if (uri.AbsolutePath.Contains("/translate_a/t", StringComparison.OrdinalIgnoreCase))
+        {
+            endpoints = [new GoogleEndpointSpec(normalized, Client: "dict-chrome-ex", IncludeDtParam: false)];
+        }
+        else if (uri.AbsolutePath.Contains("/translate_a/single", StringComparison.OrdinalIgnoreCase))
+        {
+            endpoints =
+            [
+                new GoogleEndpointSpec(normalized, Client: "dict-chrome-ex", IncludeDtParam: true),
+                new GoogleEndpointSpec(normalized, Client: "gtx", IncludeDtParam: true),
+            ];
+        }
+        else
+        {
+            endpoints =
+            [
+                new GoogleEndpointSpec($"{normalized}/translate_a/t", Client: "dict-chrome-ex", IncludeDtParam: false),
+                new GoogleEndpointSpec($"{normalized}/translate_a/single", Client: "dict-chrome-ex", IncludeDtParam: true),
+                new GoogleEndpointSpec($"{normalized}/translate_a/single", Client: "gtx", IncludeDtParam: true),
+            ];
+        }
+
+        error = null;
+        return true;
+    }
+
+    private static EngineOutcome ParseGoogleResponse(string json, LanguageCode fallbackSourceLanguage)
+    {
+        var fallbackDetected = fallbackSourceLanguage.IsAuto ? (LanguageCode?)null : fallbackSourceLanguage;
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return EngineOutcome.Failure("Empty Google Translate response.");
+        }
+
         try
         {
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
+
+            if (root.ValueKind == JsonValueKind.String)
+            {
+                return EngineOutcome.Success(root.GetString() ?? string.Empty, fallbackDetected);
+            }
+
+            if (root.ValueKind == JsonValueKind.Object)
+            {
+                return ParseGoogleObjectResponse(root, fallbackDetected);
+            }
+
             if (root.ValueKind != JsonValueKind.Array || root.GetArrayLength() == 0)
             {
                 return EngineOutcome.Failure("Unexpected Google Translate response structure.");
             }
 
-            var segments = root[0];
-            if (segments.ValueKind != JsonValueKind.Array)
+            var first = root[0];
+
+            // Shape 1 (translate_a/t with explicit sl): ["translated text", ...]
+            if (first.ValueKind == JsonValueKind.String)
+            {
+                var sb = new StringBuilder();
+                foreach (var item in root.EnumerateArray())
+                {
+                    if (item.ValueKind == JsonValueKind.String)
+                    {
+                        sb.Append(item.GetString());
+                    }
+                }
+
+                return EngineOutcome.Success(sb.ToString(), fallbackDetected);
+            }
+
+            if (first.ValueKind != JsonValueKind.Array || first.GetArrayLength() == 0)
             {
                 return EngineOutcome.Failure("Missing translation segments in Google Translate response.");
             }
 
-            var sb = new StringBuilder();
-            foreach (var segment in segments.EnumerateArray())
+            // Shape 2 (translate_a/t with sl=auto): [["translated text", "en"], ...]
+            if (first[0].ValueKind == JsonValueKind.String)
             {
-                if (segment.ValueKind == JsonValueKind.Array &&
-                    segment.GetArrayLength() > 0 &&
-                    segment[0].ValueKind == JsonValueKind.String)
+                var sb = new StringBuilder();
+                LanguageCode? detected = fallbackDetected;
+                foreach (var item in root.EnumerateArray())
                 {
-                    sb.Append(segment[0].GetString());
+                    if (item.ValueKind == JsonValueKind.Array &&
+                        item.GetArrayLength() > 0 &&
+                        item[0].ValueKind == JsonValueKind.String)
+                    {
+                        sb.Append(item[0].GetString());
+                        if (detected is null &&
+                            item.GetArrayLength() > 1 &&
+                            item[1].ValueKind == JsonValueKind.String)
+                        {
+                            var rawLang = item[1].GetString();
+                            if (!string.IsNullOrWhiteSpace(rawLang))
+                            {
+                                detected = LanguageCode.Parse(rawLang);
+                            }
+                        }
+                    }
                 }
+
+                return EngineOutcome.Success(sb.ToString(), detected);
             }
 
-            LanguageCode? detected = null;
-            if (root.GetArrayLength() > 2 && root[2].ValueKind == JsonValueKind.String)
+            // Shape 3 (translate_a/single): [[["translated", "source", ...], ...], null, "en", ...]
+            if (first[0].ValueKind == JsonValueKind.Array)
             {
-                var rawLang = root[2].GetString();
-                if (!string.IsNullOrWhiteSpace(rawLang))
+                var sb = new StringBuilder();
+                foreach (var segment in first.EnumerateArray())
                 {
-                    detected = LanguageCode.Parse(rawLang);
+                    if (segment.ValueKind == JsonValueKind.Array &&
+                        segment.GetArrayLength() > 0 &&
+                        segment[0].ValueKind == JsonValueKind.String)
+                    {
+                        sb.Append(segment[0].GetString());
+                    }
                 }
+
+                LanguageCode? detected = fallbackDetected;
+                if (root.GetArrayLength() > 2 && root[2].ValueKind == JsonValueKind.String)
+                {
+                    var rawLang = root[2].GetString();
+                    if (!string.IsNullOrWhiteSpace(rawLang))
+                    {
+                        detected = LanguageCode.Parse(rawLang);
+                    }
+                }
+
+                return EngineOutcome.Success(sb.ToString(), detected);
             }
 
-            return EngineOutcome.Success(sb.ToString(), detected);
+            return EngineOutcome.Failure("Unexpected Google Translate segment format.");
         }
         catch (JsonException ex)
         {
             return EngineOutcome.Failure($"Failed to parse Google Translate JSON: {ex.Message}");
         }
+    }
+
+    private static EngineOutcome ParseGoogleObjectResponse(JsonElement root, LanguageCode? fallbackDetected)
+    {
+        if (!root.TryGetProperty("sentences", out var sentences) || sentences.ValueKind != JsonValueKind.Array)
+        {
+            return EngineOutcome.Failure("Missing sentences field in Google Translate response.");
+        }
+
+        var sb = new StringBuilder();
+        foreach (var sentence in sentences.EnumerateArray())
+        {
+            if (sentence.ValueKind == JsonValueKind.Object &&
+                sentence.TryGetProperty("trans", out var transProp) &&
+                transProp.ValueKind == JsonValueKind.String)
+            {
+                sb.Append(transProp.GetString());
+            }
+        }
+
+        LanguageCode? detected = fallbackDetected;
+        if (root.TryGetProperty("src", out var srcProp) && srcProp.ValueKind == JsonValueKind.String)
+        {
+            var rawLang = srcProp.GetString();
+            if (!string.IsNullOrWhiteSpace(rawLang))
+            {
+                detected = LanguageCode.Parse(rawLang);
+            }
+        }
+
+        return EngineOutcome.Success(sb.ToString(), detected);
     }
 
     private async Task<EngineOutcome> TranslateWithBingAsync(
@@ -333,6 +591,7 @@ public sealed class FreeTraditionalTranslationProvider : ITranslationProvider
             }
 
             using var tokenRequest = new HttpRequestMessage(HttpMethod.Get, BingAuthEndpoint);
+            tokenRequest.Headers.TryAddWithoutValidation("User-Agent", BrowserUserAgent);
             using var response = await httpClient.SendAsync(tokenRequest, cancellationToken).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
@@ -374,6 +633,7 @@ public sealed class FreeTraditionalTranslationProvider : ITranslationProvider
             Content = new StringContent(payloadJson, Encoding.UTF8, "application/json"),
         };
         httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        httpRequest.Headers.TryAddWithoutValidation("User-Agent", BrowserUserAgent);
 
         using var response = await httpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
         if (response.StatusCode == HttpStatusCode.Unauthorized)
@@ -431,6 +691,11 @@ public sealed class FreeTraditionalTranslationProvider : ITranslationProvider
             return EngineOutcome.Failure($"Failed to parse Bing Translate JSON: {ex.Message}");
         }
     }
+
+    private readonly record struct GoogleEndpointSpec(
+        string BaseEndpoint,
+        string Client,
+        bool IncludeDtParam);
 
     private readonly record struct EngineOutcome(
         bool IsSuccess,

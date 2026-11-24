@@ -11,8 +11,24 @@ public sealed class DpapiSecretProtector : ISecretProtector
 
     private static readonly byte[] Entropy = Encoding.UTF8.GetBytes("PopTranslate.V1.Secrets");
 
+    private int _decryptionFailureCount;
+
+    public bool HadDecryptionFailure => Volatile.Read(ref _decryptionFailureCount) > 0;
+
+    public int DecryptionFailureCount => Volatile.Read(ref _decryptionFailureCount);
+
     public static bool IsProtected(string? value) =>
         !string.IsNullOrEmpty(value) && value.StartsWith(Prefix, StringComparison.Ordinal);
+
+    public bool CanDecryptProtectedValue(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || !IsProtected(value))
+        {
+            return true;
+        }
+
+        return TryUnprotect(value, out _);
+    }
 
     public string Protect(string plaintext)
     {
@@ -27,8 +43,15 @@ public sealed class DpapiSecretProtector : ISecretProtector
         }
 
         var plainBytes = Encoding.UTF8.GetBytes(plaintext);
-        var protectedBytes = ProtectOnWindows(plainBytes);
-        return Prefix + Convert.ToBase64String(protectedBytes);
+        try
+        {
+            var protectedBytes = ProtectOnWindows(plainBytes);
+            return Prefix + Convert.ToBase64String(protectedBytes);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(plainBytes);
+        }
     }
 
     public string Unprotect(string protectedText)
@@ -60,23 +83,39 @@ public sealed class DpapiSecretProtector : ISecretProtector
             return false;
         }
 
+        byte[]? plainBytes = null;
         try
         {
-            var payload = protectedText[Prefix.Length..];
-            var protectedBytes = Convert.FromBase64String(payload);
-            var plainBytes = UnprotectOnWindows(protectedBytes);
+            var payload = protectedText.AsSpan(Prefix.Length).Trim();
+            var protectedBytes = Convert.FromBase64String(payload.ToString());
+            plainBytes = UnprotectOnWindows(protectedBytes);
             plaintext = Encoding.UTF8.GetString(plainBytes);
             return true;
         }
         catch (FormatException)
         {
+            Interlocked.Increment(ref _decryptionFailureCount);
             plaintext = string.Empty;
             return false;
         }
         catch (CryptographicException)
         {
+            Interlocked.Increment(ref _decryptionFailureCount);
             plaintext = string.Empty;
             return false;
+        }
+        catch (ArgumentException)
+        {
+            Interlocked.Increment(ref _decryptionFailureCount);
+            plaintext = string.Empty;
+            return false;
+        }
+        finally
+        {
+            if (plainBytes is not null)
+            {
+                CryptographicOperations.ZeroMemory(plainBytes);
+            }
         }
     }
 

@@ -4,11 +4,14 @@ using System.Text;
 using System.Threading.Channels;
 using PopTranslate.Core.Contracts;
 using PopTranslate.Core.Models;
+using PopTranslate.Core.Translation;
 
 namespace PopTranslate.Core.Polish;
 
 public sealed class PolishOrchestrator : IPolishOrchestrator
 {
+    private static readonly TimeSpan WorkerTeardownTimeout = TimeSpan.FromSeconds(1);
+
     private readonly ISettingsStore _settingsStore;
     private readonly ITextPreprocessor _textPreprocessor;
     private readonly ILanguageDetector _languageDetector;
@@ -38,21 +41,66 @@ public sealed class PolishOrchestrator : IPolishOrchestrator
     }
 
     public IReadOnlyList<ProviderInstanceConfig> GetEligibleProviders() =>
-        _settingsStore.Current.Providers
-            .Where(p => p.Enabled && _providers.ContainsKey(p.Kind))
+        (_settingsStore.Current.Providers ?? [])
+            .Where(p => p is not null && p.Enabled && _providers.ContainsKey(p.Kind))
             .OrderBy(p => p.SortOrder)
             .Select(p => p.Clone())
             .ToList();
 
-    public async IAsyncEnumerable<ProviderStreamUpdate> PolishParallelAsync(
+    public IAsyncEnumerable<ProviderStreamUpdate> PolishParallelAsync(
         PolishRequest request,
-        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var prepared = PrepareExecution(request);
+        return PolishParallelCoreAsync(prepared, cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<TranslationResult>> PolishAllAsync(
+        PolishRequest request,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var (effectiveRequest, initialDetected, targetLanguage, selectedProviders) = PrepareExecution(request);
+        var prepared = PrepareExecution(request);
+        if (prepared.SelectedProviders.Count == 0)
+        {
+            return Array.Empty<TranslationResult>();
+        }
 
-        if (selectedProviders.Count == 0)
+        var finalByInstance = new Dictionary<string, ProviderStreamUpdate>(StringComparer.Ordinal);
+
+        await foreach (var update in PolishParallelCoreAsync(prepared, cancellationToken).ConfigureAwait(false))
+        {
+            finalByInstance[update.ProviderInstanceId] = update;
+        }
+
+        var results = new List<TranslationResult>(prepared.SelectedProviders.Count);
+        foreach (var instance in prepared.SelectedProviders)
+        {
+            if (finalByInstance.TryGetValue(instance.Id, out var finalUpdate))
+            {
+                results.Add(new TranslationResult(
+                    ProviderInstanceId: finalUpdate.ProviderInstanceId,
+                    ProviderDisplayName: finalUpdate.ProviderDisplayName,
+                    ProviderKind: finalUpdate.ProviderKind,
+                    TranslatedText: finalUpdate.AccumulatedText,
+                    DetectedSourceLanguage: finalUpdate.DetectedSourceLanguage,
+                    TargetLanguage: finalUpdate.TargetLanguage,
+                    IsSuccess: finalUpdate.State == ProviderStreamState.Completed,
+                    ErrorMessage: finalUpdate.ErrorMessage,
+                    Elapsed: finalUpdate.Elapsed));
+            }
+        }
+
+        return results;
+    }
+
+    private async IAsyncEnumerable<ProviderStreamUpdate> PolishParallelCoreAsync(
+        PreparedPolishExecution prepared,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        if (prepared.SelectedProviders.Count == 0)
         {
             yield break;
         }
@@ -68,7 +116,7 @@ public sealed class PolishOrchestrator : IPolishOrchestrator
         var linkedToken = linkedCts.Token;
 
         // Emit immediate Pending updates in configured SortOrder before spawning worker tasks.
-        foreach (var instance in selectedProviders)
+        foreach (var instance in prepared.SelectedProviders)
         {
             channel.Writer.TryWrite(new ProviderStreamUpdate(
                 ProviderInstanceId: instance.Id,
@@ -77,18 +125,24 @@ public sealed class PolishOrchestrator : IPolishOrchestrator
                 State: ProviderStreamState.Pending,
                 DeltaText: string.Empty,
                 AccumulatedText: string.Empty,
-                DetectedSourceLanguage: initialDetected,
-                TargetLanguage: targetLanguage,
+                DetectedSourceLanguage: prepared.InitialDetected,
+                TargetLanguage: prepared.TargetLanguage,
                 ErrorMessage: null,
                 Elapsed: TimeSpan.Zero));
         }
 
-        var workerTasks = new List<Task>(selectedProviders.Count);
-        foreach (var instance in selectedProviders)
+        var workerTasks = new List<Task>(prepared.SelectedProviders.Count);
+        foreach (var instance in prepared.SelectedProviders)
         {
             var capturedInstance = instance;
             workerTasks.Add(Task.Run(
-                () => ExecuteProviderAsync(capturedInstance, effectiveRequest, initialDetected, targetLanguage, channel.Writer, linkedToken),
+                () => ExecuteProviderAsync(
+                    capturedInstance,
+                    prepared.EffectiveRequest,
+                    prepared.InitialDetected,
+                    prepared.TargetLanguage,
+                    channel.Writer,
+                    linkedToken),
                 CancellationToken.None));
         }
 
@@ -122,7 +176,11 @@ public sealed class PolishOrchestrator : IPolishOrchestrator
 
             try
             {
-                await allWorkersTask.ConfigureAwait(false);
+                await allWorkersTask.WaitAsync(WorkerTeardownTimeout).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                // Bounded teardown: do not hang caller disposal if a socket refuses cancellation.
             }
             catch
             {
@@ -131,58 +189,25 @@ public sealed class PolishOrchestrator : IPolishOrchestrator
         }
     }
 
-    public async Task<IReadOnlyList<TranslationResult>> PolishAllAsync(
-        PolishRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-
-        var (_, _, _, selectedProviders) = PrepareExecution(request);
-        if (selectedProviders.Count == 0)
-        {
-            return Array.Empty<TranslationResult>();
-        }
-
-        var finalByInstance = new Dictionary<string, ProviderStreamUpdate>(StringComparer.Ordinal);
-
-        await foreach (var update in PolishParallelAsync(request, cancellationToken).ConfigureAwait(false))
-        {
-            finalByInstance[update.ProviderInstanceId] = update;
-        }
-
-        var results = new List<TranslationResult>(selectedProviders.Count);
-        foreach (var instance in selectedProviders)
-        {
-            if (finalByInstance.TryGetValue(instance.Id, out var finalUpdate))
-            {
-                results.Add(new TranslationResult(
-                    ProviderInstanceId: finalUpdate.ProviderInstanceId,
-                    ProviderDisplayName: finalUpdate.ProviderDisplayName,
-                    ProviderKind: finalUpdate.ProviderKind,
-                    TranslatedText: finalUpdate.AccumulatedText,
-                    DetectedSourceLanguage: finalUpdate.DetectedSourceLanguage,
-                    TargetLanguage: finalUpdate.TargetLanguage,
-                    IsSuccess: finalUpdate.State == ProviderStreamState.Completed,
-                    ErrorMessage: finalUpdate.ErrorMessage,
-                    Elapsed: finalUpdate.Elapsed));
-            }
-        }
-
-        return results;
-    }
-
-    private (
-        PolishRequest EffectiveRequest,
-        LanguageCode? InitialDetected,
-        LanguageCode TargetLanguage,
-        List<ProviderInstanceConfig> SelectedProviders)
-        PrepareExecution(PolishRequest request)
+    private PreparedPolishExecution PrepareExecution(PolishRequest request)
     {
         var settings = _settingsStore.Current;
-        var shouldMerge = request.ApplyTextPreprocessing && settings.MergePdfLineBreaks;
-        var processedText = request.ApplyTextPreprocessing
-            ? _textPreprocessor.Preprocess(request.Text, shouldMerge, isFromOcr: false)
-            : request.Text ?? string.Empty;
+        string processedText;
+
+        if (!request.ApplyTextPreprocessing)
+        {
+            processedText = request.Text ?? string.Empty;
+        }
+        else
+        {
+            var shouldMerge = settings.MergePdfLineBreaks;
+            processedText = _textPreprocessor.Preprocess(request.Text, shouldMerge, isFromOcr: false);
+            if ((!settings.EnableCodeIdentifierSplit || request.Style == PolishStyle.CodeNaming) &&
+                IsSingleWhitespaceFreeToken(request.Text))
+            {
+                processedText = request.Text!.Trim();
+            }
+        }
 
         var resolvedCustomPrompt = request.Style == PolishStyle.Custom && string.IsNullOrWhiteSpace(request.CustomPrompt)
             ? (settings.Polish?.CustomPrompt ?? PolishConfig.DefaultCustomPrompt)
@@ -200,28 +225,30 @@ public sealed class PolishOrchestrator : IPolishOrchestrator
         {
             Text = processedText,
             CustomPrompt = resolvedCustomPrompt,
+            PreferredLanguage = initialDetected,
         };
 
         List<ProviderInstanceConfig> selected;
+        var providersList = settings.Providers ?? [];
         if (request.ProviderInstanceIds is { Count: > 0 } requestedIds)
         {
             var idSet = new HashSet<string>(requestedIds, StringComparer.Ordinal);
-            selected = settings.Providers
-                .Where(p => idSet.Contains(p.Id) && _providers.ContainsKey(p.Kind))
+            selected = providersList
+                .Where(p => p is not null && idSet.Contains(p.Id) && _providers.ContainsKey(p.Kind))
                 .OrderBy(p => p.SortOrder)
                 .Select(p => p.Clone())
                 .ToList();
         }
         else
         {
-            selected = settings.Providers
-                .Where(p => p.Enabled && _providers.ContainsKey(p.Kind))
+            selected = providersList
+                .Where(p => p is not null && p.Enabled && _providers.ContainsKey(p.Kind))
                 .OrderBy(p => p.SortOrder)
                 .Select(p => p.Clone())
                 .ToList();
         }
 
-        return (effectiveRequest, initialDetected, effectiveLanguage, selected);
+        return new PreparedPolishExecution(effectiveRequest, initialDetected, effectiveLanguage, selected);
     }
 
     private async Task ExecuteProviderAsync(
@@ -257,38 +284,99 @@ public sealed class PolishOrchestrator : IPolishOrchestrator
         {
             string? chunkError = null;
 
-            await foreach (var chunk in provider.PolishStreamAsync(effectiveRequest, instance, cancellationToken).ConfigureAwait(false))
+            if (provider is IReasoningPolishProvider reasoningProvider)
             {
-                if (chunk.DetectedSourceLanguage is { IsAuto: false } chunkDetected)
+                await foreach (var item in reasoningProvider
+                    .PolishReasoningStreamAsync(effectiveRequest, instance, cancellationToken)
+                    .ConfigureAwait(false))
                 {
-                    detected = chunkDetected;
-                }
+                    var chunk = item.Chunk;
+                    if (chunk.DetectedSourceLanguage is { IsAuto: false } chunkDetected)
+                    {
+                        detected = chunkDetected;
+                    }
 
-                if (!string.IsNullOrWhiteSpace(chunk.ErrorMessage))
-                {
-                    chunkError = chunk.ErrorMessage;
-                    break;
-                }
+                    if (!string.IsNullOrWhiteSpace(chunk.ErrorMessage))
+                    {
+                        chunkError = chunk.ErrorMessage;
+                        break;
+                    }
 
-                if (!string.IsNullOrEmpty(chunk.DeltaText))
-                {
-                    accumulated.Append(chunk.DeltaText);
-                    writer.TryWrite(new ProviderStreamUpdate(
-                        instance.Id,
-                        instance.DisplayName,
-                        instance.Kind,
-                        ProviderStreamState.Streaming,
-                        chunk.DeltaText,
-                        accumulated.ToString(),
-                        detected,
-                        targetLanguage,
-                        null,
-                        sw.Elapsed));
-                }
+                    if (item.IsReasoning && accumulated.Length == 0)
+                    {
+                        writer.TryWrite(new ProviderStreamUpdate(
+                            instance.Id,
+                            instance.DisplayName,
+                            instance.Kind,
+                            ProviderStreamState.Streaming,
+                            string.Empty,
+                            string.Empty,
+                            detected,
+                            targetLanguage,
+                            null,
+                            sw.Elapsed,
+                            IsReasoning: true));
+                        continue;
+                    }
 
-                if (chunk.IsComplete)
+                    if (!string.IsNullOrEmpty(chunk.DeltaText))
+                    {
+                        accumulated.Append(chunk.DeltaText);
+                        writer.TryWrite(new ProviderStreamUpdate(
+                            instance.Id,
+                            instance.DisplayName,
+                            instance.Kind,
+                            ProviderStreamState.Streaming,
+                            chunk.DeltaText,
+                            accumulated.ToString(),
+                            detected,
+                            targetLanguage,
+                            null,
+                            sw.Elapsed,
+                            IsReasoning: false));
+                    }
+
+                    if (chunk.IsComplete)
+                    {
+                        break;
+                    }
+                }
+            }
+            else
+            {
+                await foreach (var chunk in provider.PolishStreamAsync(effectiveRequest, instance, cancellationToken).ConfigureAwait(false))
                 {
-                    break;
+                    if (chunk.DetectedSourceLanguage is { IsAuto: false } chunkDetected)
+                    {
+                        detected = chunkDetected;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(chunk.ErrorMessage))
+                    {
+                        chunkError = chunk.ErrorMessage;
+                        break;
+                    }
+
+                    if (!string.IsNullOrEmpty(chunk.DeltaText))
+                    {
+                        accumulated.Append(chunk.DeltaText);
+                        writer.TryWrite(new ProviderStreamUpdate(
+                            instance.Id,
+                            instance.DisplayName,
+                            instance.Kind,
+                            ProviderStreamState.Streaming,
+                            chunk.DeltaText,
+                            accumulated.ToString(),
+                            detected,
+                            targetLanguage,
+                            null,
+                            sw.Elapsed));
+                    }
+
+                    if (chunk.IsComplete)
+                    {
+                        break;
+                    }
                 }
             }
 
@@ -353,4 +441,28 @@ public sealed class PolishOrchestrator : IPolishOrchestrator
                 sw.Elapsed));
         }
     }
+
+    private static bool IsSingleWhitespaceFreeToken(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        foreach (var ch in text.AsSpan().Trim())
+        {
+            if (char.IsWhiteSpace(ch))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private readonly record struct PreparedPolishExecution(
+        PolishRequest EffectiveRequest,
+        LanguageCode? InitialDetected,
+        LanguageCode TargetLanguage,
+        List<ProviderInstanceConfig> SelectedProviders);
 }

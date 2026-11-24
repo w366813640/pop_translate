@@ -6,4 +6,5 @@ public sealed record OcrImage(
     int PixelHeight,
     double DpiScale = 1.0,
     string MimeType = "image/png",
-    LanguageCode? PreferredLanguage = null);
+    LanguageCode? PreferredLanguage = null,
+    byte[]? RawBgraBytes = null);

@@ -40,8 +40,8 @@ public sealed class BackTranslationService : IBackTranslationService
         ArgumentNullException.ThrowIfNull(request);
 
         var settings = _settingsStore.Current;
-        var matchedInstance = settings.Providers
-            .FirstOrDefault(p => string.Equals(p.Id, request.ProviderInstanceId, StringComparison.Ordinal))
+        var matchedInstance = (settings.Providers ?? [])
+            .FirstOrDefault(p => p is not null && string.Equals(p.Id, request.ProviderInstanceId, StringComparison.Ordinal))
             ?.Clone();
 
         var detectedSource = request.TranslatedLanguage.IsAuto
@@ -127,105 +127,134 @@ public sealed class BackTranslationService : IBackTranslationService
             IsFromOcr: false,
             ProviderInstanceIds: [matchedInstance.Id]);
 
-        IAsyncEnumerator<TranslationChunk>? enumerator = null;
+        var previousSuppress = OpenAiStreamHelper.SuppressDictionaryAndGlossary.Value;
+        OpenAiStreamHelper.SuppressDictionaryAndGlossary.Value = true;
+
+        IAsyncEnumerator<ReasoningStreamChunk>? enumerator = null;
         string? terminalError = null;
         var cancelled = false;
 
         try
         {
-            enumerator = provider.TranslateStreamAsync(reverseRequest, matchedInstance, cancellationToken)
-                .GetAsyncEnumerator(cancellationToken);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            cancelled = true;
-        }
-        catch (OperationCanceledException)
-        {
-            terminalError = "Back-translation request timed out.";
-        }
-        catch (Exception ex)
-        {
-            terminalError = ex.Message;
-        }
-
-        if (enumerator is not null)
-        {
             try
             {
-                while (true)
-                {
-                    bool hasNext;
-                    try
-                    {
-                        hasNext = await enumerator.MoveNextAsync().ConfigureAwait(false);
-                    }
-                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                    {
-                        cancelled = true;
-                        break;
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        terminalError = "Back-translation stream timed out.";
-                        break;
-                    }
-                    catch (Exception ex)
-                    {
-                        terminalError = ex.Message;
-                        break;
-                    }
-
-                    if (!hasNext)
-                    {
-                        break;
-                    }
-
-                    var chunk = enumerator.Current;
-                    if (chunk.DetectedSourceLanguage is { IsAuto: false } chunkDetected)
-                    {
-                        detectedSource = chunkDetected;
-                    }
-
-                    if (!string.IsNullOrWhiteSpace(chunk.ErrorMessage))
-                    {
-                        terminalError = chunk.ErrorMessage;
-                        break;
-                    }
-
-                    if (!string.IsNullOrEmpty(chunk.DeltaText))
-                    {
-                        accumulated.Append(chunk.DeltaText);
-                        yield return new ProviderStreamUpdate(
-                            ProviderInstanceId: matchedInstance.Id,
-                            ProviderDisplayName: matchedInstance.DisplayName,
-                            ProviderKind: matchedInstance.Kind,
-                            State: ProviderStreamState.Streaming,
-                            DeltaText: chunk.DeltaText,
-                            AccumulatedText: accumulated.ToString(),
-                            DetectedSourceLanguage: detectedSource,
-                            TargetLanguage: backTarget,
-                            ErrorMessage: null,
-                            Elapsed: sw.Elapsed);
-                    }
-
-                    if (chunk.IsComplete)
-                    {
-                        break;
-                    }
-                }
+                enumerator = WrapProviderStreamAsync(provider, reverseRequest, matchedInstance, cancellationToken)
+                    .GetAsyncEnumerator(cancellationToken);
             }
-            finally
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                cancelled = true;
+            }
+            catch (OperationCanceledException)
+            {
+                terminalError = "Back-translation request timed out.";
+            }
+            catch (Exception ex)
+            {
+                terminalError = ex.Message;
+            }
+
+            if (enumerator is not null)
             {
                 try
                 {
-                    await enumerator.DisposeAsync().ConfigureAwait(false);
+                    while (true)
+                    {
+                        bool hasNext;
+                        try
+                        {
+                            hasNext = await enumerator.MoveNextAsync().ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                        {
+                            cancelled = true;
+                            break;
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            terminalError = "Back-translation stream timed out.";
+                            break;
+                        }
+                        catch (Exception ex)
+                        {
+                            terminalError = ex.Message;
+                            break;
+                        }
+
+                        if (!hasNext)
+                        {
+                            break;
+                        }
+
+                        var item = enumerator.Current;
+                        var chunk = item.Chunk;
+                        if (chunk.DetectedSourceLanguage is { IsAuto: false } chunkDetected)
+                        {
+                            detectedSource = chunkDetected;
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(chunk.ErrorMessage))
+                        {
+                            terminalError = chunk.ErrorMessage;
+                            break;
+                        }
+
+                        if (item.IsReasoning && accumulated.Length == 0)
+                        {
+                            yield return new ProviderStreamUpdate(
+                                ProviderInstanceId: matchedInstance.Id,
+                                ProviderDisplayName: matchedInstance.DisplayName,
+                                ProviderKind: matchedInstance.Kind,
+                                State: ProviderStreamState.Streaming,
+                                DeltaText: string.Empty,
+                                AccumulatedText: string.Empty,
+                                DetectedSourceLanguage: detectedSource,
+                                TargetLanguage: backTarget,
+                                ErrorMessage: null,
+                                Elapsed: sw.Elapsed,
+                                IsReasoning: true);
+                            continue;
+                        }
+
+                        if (!string.IsNullOrEmpty(chunk.DeltaText))
+                        {
+                            accumulated.Append(chunk.DeltaText);
+                            yield return new ProviderStreamUpdate(
+                                ProviderInstanceId: matchedInstance.Id,
+                                ProviderDisplayName: matchedInstance.DisplayName,
+                                ProviderKind: matchedInstance.Kind,
+                                State: ProviderStreamState.Streaming,
+                                DeltaText: chunk.DeltaText,
+                                AccumulatedText: accumulated.ToString(),
+                                DetectedSourceLanguage: detectedSource,
+                                TargetLanguage: backTarget,
+                                ErrorMessage: null,
+                                Elapsed: sw.Elapsed,
+                                IsReasoning: false);
+                        }
+
+                        if (chunk.IsComplete)
+                        {
+                            break;
+                        }
+                    }
                 }
-                catch
+                finally
                 {
-                    // Ignore enumerator teardown errors during cancellation/failure.
+                    try
+                    {
+                        await enumerator.DisposeAsync().ConfigureAwait(false);
+                    }
+                    catch
+                    {
+                        // Ignore enumerator teardown errors during cancellation/failure.
+                    }
                 }
             }
+        }
+        finally
+        {
+            OpenAiStreamHelper.SuppressDictionaryAndGlossary.Value = previousSuppress;
         }
 
         sw.Stop();
@@ -311,5 +340,27 @@ public sealed class BackTranslationService : IBackTranslationService
             IsSuccess: finalUpdate.State == ProviderStreamState.Completed,
             ErrorMessage: finalUpdate.ErrorMessage,
             Elapsed: finalUpdate.Elapsed);
+    }
+
+    private static async IAsyncEnumerable<ReasoningStreamChunk> WrapProviderStreamAsync(
+        ITranslationProvider provider,
+        TranslationRequest request,
+        ProviderInstanceConfig config,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        if (provider is IReasoningTranslationProvider reasoningProvider)
+        {
+            await foreach (var item in reasoningProvider.TranslateReasoningStreamAsync(request, config, cancellationToken).ConfigureAwait(false))
+            {
+                yield return item;
+            }
+
+            yield break;
+        }
+
+        await foreach (var chunk in provider.TranslateStreamAsync(request, config, cancellationToken).ConfigureAwait(false))
+        {
+            yield return new ReasoningStreamChunk(chunk, IsReasoning: false);
+        }
     }
 }

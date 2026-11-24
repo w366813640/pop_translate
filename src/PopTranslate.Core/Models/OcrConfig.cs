@@ -1,5 +1,12 @@
 namespace PopTranslate.Core.Models;
 
+public enum OcrPromptMode
+{
+    PlainText = 0,
+    MarkdownTable = 1,
+    LatexFormula = 2,
+}
+
 public sealed class OcrConfig
 {
     public const string DefaultVisionOcrPrompt =
@@ -26,17 +33,20 @@ public sealed class OcrConfig
 
     public string VisionPrompt { get; set; } = DefaultVisionOcrPrompt;
 
+    public OcrPromptMode PromptMode { get; set; } = OcrPromptMode.PlainText;
+
     public int TimeoutSeconds { get; set; } = 45;
 
     public OcrConfig Clone() => new()
     {
         ActiveProvider = ActiveProvider,
-        PreferredWindowsOcrLanguageTag = PreferredWindowsOcrLanguageTag,
+        PreferredWindowsOcrLanguageTag = PreferredWindowsOcrLanguageTag ?? string.Empty,
         AutoMergeOcrLineBreaks = AutoMergeOcrLineBreaks,
-        VisionBaseUrl = VisionBaseUrl,
-        VisionModel = VisionModel,
-        EncryptedVisionApiKey = EncryptedVisionApiKey,
-        VisionPrompt = VisionPrompt,
+        VisionBaseUrl = VisionBaseUrl ?? string.Empty,
+        VisionModel = VisionModel ?? string.Empty,
+        EncryptedVisionApiKey = EncryptedVisionApiKey ?? string.Empty,
+        VisionPrompt = VisionPrompt ?? DefaultVisionOcrPrompt,
+        PromptMode = PromptMode,
         TimeoutSeconds = TimeoutSeconds,
     };
 }

@@ -77,7 +77,8 @@ public sealed class ScreenshotCaptureService : IScreenshotCaptureService
                 return await ScreenCaptureGdi.CropAndEncodeAsync(
                         selection.Value.MonitorBitmap,
                         selection.Value.LocalSelectionRect,
-                        cancellationToken)
+                        cancellationToken,
+                        copyOnly: selection.Value.CopyOnly)
                     .ConfigureAwait(false);
             }
             finally
@@ -117,12 +118,12 @@ public sealed class ScreenshotCaptureService : IScreenshotCaptureService
         }
     }
 
-    private Task<(CapturedMonitorBitmap MonitorBitmap, ScreenRect LocalSelectionRect)?> RunOverlaySelectionAsync(
+    private Task<OverlaySelectionResult?> RunOverlaySelectionAsync(
         IReadOnlyList<CapturedMonitorBitmap> capturedMonitors,
         ScreenPoint initialCursorPos,
         CancellationToken cancellationToken)
     {
-        var tcs = new TaskCompletionSource<(CapturedMonitorBitmap, ScreenRect)?>(
+        var tcs = new TaskCompletionSource<OverlaySelectionResult?>(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
         var thread = new Thread(() =>
@@ -144,7 +145,7 @@ public sealed class ScreenshotCaptureService : IScreenshotCaptureService
         IReadOnlyList<CapturedMonitorBitmap> capturedMonitors,
         ScreenPoint initialCursorPos,
         CancellationToken cancellationToken,
-        TaskCompletionSource<(CapturedMonitorBitmap, ScreenRect)?> completion)
+        TaskCompletionSource<OverlaySelectionResult?> completion)
     {
         PInvoke.SetThreadDpiAwarenessContext(DpiAwarenessPerMonitorV2);
 
@@ -165,7 +166,7 @@ public sealed class ScreenshotCaptureService : IScreenshotCaptureService
         var hInstance = new HINSTANCE((nint)PInvoke.GetModuleHandle((PCWSTR)null));
         var windowsByHwnd = new Dictionary<nint, FrozenMonitorOverlayWindow>(capturedMonitors.Count);
         var overlays = new List<FrozenMonitorOverlayWindow>(capturedMonitors.Count);
-        (CapturedMonitorBitmap, ScreenRect)? result = null;
+        OverlaySelectionResult? result = null;
         bool classRegistered = false;
 
         WNDPROC wndProc = (hwnd, msg, wParam, lParam) =>
@@ -178,7 +179,7 @@ public sealed class ScreenshotCaptureService : IScreenshotCaptureService
             return PInvoke.DefWindowProc(hwnd, msg, wParam, lParam);
         };
 
-        void FinishAndQuit((CapturedMonitorBitmap, ScreenRect)? selection)
+        void FinishAndQuit(OverlaySelectionResult? selection)
         {
             result = selection;
             PInvoke.PostQuitMessage(0);
@@ -217,12 +218,12 @@ public sealed class ScreenshotCaptureService : IScreenshotCaptureService
             {
                 var overlay = new FrozenMonitorOverlayWindow(
                     captured,
-                    onCompleted: (bmp, rect) => FinishAndQuit((bmp, rect)),
+                    onCompleted: (bmp, rect, copyOnly) => FinishAndQuit(new OverlaySelectionResult(bmp, rect, copyOnly)),
                     onCancelled: () => FinishAndQuit(null),
                     onPainted: () => Interlocked.Increment(ref _lastSessionPaintCount));
 
-                overlay.Create(className, hInstance);
                 overlays.Add(overlay);
+                overlay.Create(className, hInstance);
                 windowsByHwnd[(nint)overlay.Handle] = overlay;
                 overlay.Show();
 
@@ -235,6 +236,7 @@ public sealed class ScreenshotCaptureService : IScreenshotCaptureService
             focusCandidate ??= overlays.FirstOrDefault();
             if (focusCandidate is not null && focusCandidate.Handle != HWND.Null)
             {
+                _windowHelper.ForceForegroundWindow((nint)focusCandidate.Handle);
                 PInvoke.SetForegroundWindow(focusCandidate.Handle);
             }
 
@@ -278,4 +280,9 @@ public sealed class ScreenshotCaptureService : IScreenshotCaptureService
             GC.KeepAlive(wndProc);
         }
     }
+
+    private readonly record struct OverlaySelectionResult(
+        CapturedMonitorBitmap MonitorBitmap,
+        ScreenRect LocalSelectionRect,
+        bool CopyOnly);
 }

@@ -20,6 +20,7 @@ using PopTranslate.Win32.Ocr;
 using PopTranslate.Win32.Screenshot;
 using PopTranslate.Win32.Selection;
 using PopTranslate.Win32.Startup;
+using PopTranslate.Win32.Tts;
 using PopTranslate.Win32.Windowing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -49,7 +50,7 @@ public sealed class DiContainerResolutionTests
             .OrderBy(t => t.Name, StringComparer.Ordinal)
             .ToList();
 
-        Assert.Equal(21, contractInterfaces.Count);
+        Assert.Equal(24, contractInterfaces.Count);
 
         foreach (var contractType in contractInterfaces)
         {
@@ -58,7 +59,7 @@ public sealed class DiContainerResolutionTests
             Assert.IsAssignableFrom(contractType, resolved);
         }
 
-        // Assert exact concrete wiring for every Core & Win32 contract (all 21 contracts).
+        // Assert exact concrete wiring for every Core & Win32 contract (all 24 contracts).
         Assert.IsType<DpapiSecretProtector>(provider.GetRequiredService<ISecretProtector>());
         Assert.IsType<JsonSettingsStore>(provider.GetRequiredService<ISettingsStore>());
         Assert.IsType<ProxyHttpClientFactory>(provider.GetRequiredService<IProxyHttpClientFactory>());
@@ -67,6 +68,7 @@ public sealed class DiContainerResolutionTests
         Assert.IsType<TextPreprocessor>(provider.GetRequiredService<ITextPreprocessor>());
         Assert.IsType<TranslationOrchestrator>(provider.GetRequiredService<ITranslationOrchestrator>());
         Assert.IsType<BackTranslationService>(provider.GetRequiredService<IBackTranslationService>());
+        Assert.IsType<OpenAiModelDiscoveryService>(provider.GetRequiredService<IModelDiscoveryService>());
         Assert.IsType<OpenAiCompatiblePolishProvider>(provider.GetRequiredService<IPolishProvider>());
         Assert.IsType<PolishOrchestrator>(provider.GetRequiredService<IPolishOrchestrator>());
         Assert.IsType<LocalTextDiffService>(provider.GetRequiredService<ITextDiffService>());
@@ -76,9 +78,11 @@ public sealed class DiContainerResolutionTests
         Assert.IsType<WindowHelperService>(provider.GetRequiredService<IWindowHelperService>());
         Assert.IsType<GlobalHotkeyService>(provider.GetRequiredService<IGlobalHotkeyService>());
         Assert.IsType<TextSelectionService>(provider.GetRequiredService<ITextSelectionService>());
+        Assert.IsType<Win32TextWriteBackService>(provider.GetRequiredService<ITextWriteBackService>());
         Assert.IsType<MouseSelectionHoverMonitor>(provider.GetRequiredService<ISelectionHoverMonitor>());
         Assert.IsType<ScreenshotCaptureService>(provider.GetRequiredService<IScreenshotCaptureService>());
         Assert.IsType<StartupPrivilegeService>(provider.GetRequiredService<IStartupPrivilegeService>());
+        Assert.IsType<WindowsAndEdgeTtsService>(provider.GetRequiredService<ITtsService>());
     }
 
     [Fact]
@@ -316,9 +320,10 @@ public sealed class DiContainerResolutionTests
                 };
             }
 
-            if (uri.StartsWith("https://translate.googleapis.com/translate_a/single", StringComparison.Ordinal))
+            if (uri.StartsWith("https://clients5.google.com/translate_a/", StringComparison.Ordinal) ||
+                uri.StartsWith("https://translate.googleapis.com/translate_a/", StringComparison.Ordinal))
             {
-                // Simulate Google 429 to exercise FreeTraditional fallback to Bing inside the full DI graph.
+                // Simulate Google 429 across all endpoints to exercise FreeTraditional fallback to Bing inside the full DI graph.
                 return new HttpResponseMessage(HttpStatusCode.TooManyRequests);
             }
 
@@ -815,7 +820,7 @@ public sealed class DiContainerResolutionTests
             var reverseSystemPrompt = openAiReverseDoc.RootElement.GetProperty("messages")[0].GetProperty("content").GetString();
             var reverseUserContent = openAiReverseDoc.RootElement.GetProperty("messages")[1].GetProperty("content").GetString();
             Assert.Contains("English", reverseSystemPrompt ?? string.Empty, StringComparison.OrdinalIgnoreCase);
-            Assert.Equal("早上好，团队！", reverseUserContent);
+            Assert.Equal("<source_text>\n早上好，团队！\n</source_text>", reverseUserContent);
         }
 
         Assert.Equal(2, deepLAuthHeaders.Count);
@@ -1031,7 +1036,11 @@ public sealed class DiContainerResolutionTests
         Assert.Contains("500", customResults[1].ErrorMessage, StringComparison.Ordinal);
 
         Assert.Equal(2, observedSystemPrompts.Count);
-        Assert.All(observedSystemPrompts, x => Assert.Equal(persistedCustomPrompt, x.SystemPrompt));
+        Assert.All(observedSystemPrompts, x =>
+        {
+            Assert.StartsWith(persistedCustomPrompt, x.SystemPrompt, StringComparison.Ordinal);
+            Assert.Contains("<source_text>", x.SystemPrompt, StringComparison.Ordinal);
+        });
     }
 
     [Fact]
@@ -1106,11 +1115,12 @@ public sealed class DiContainerResolutionTests
     [Fact]
     public void GlobalHotkeyService_EndToEndDiContainer_RegistersAllFourActionsIncludingSelectionPolishAndReportsConflicts()
     {
-        // Use distinct F13-F16 keys (0x7C-0x7F) so this test never collides with parallel unit tests using F9-F12.
+        // Use distinct F13-F17 keys (0x7C-0x80) so this test never collides with parallel unit tests using F9-F12.
         const uint vkF13 = 0x7C;
         const uint vkF14 = 0x7D;
         const uint vkF15 = 0x7E;
         const uint vkF16 = 0x7F;
+        const uint vkF17 = 0x80;
         const HotkeyModifiers safeModifiers = HotkeyModifiers.Control | HotkeyModifiers.Alt | HotkeyModifiers.Shift;
 
         var services = new ServiceCollection();
@@ -1132,22 +1142,24 @@ public sealed class DiContainerResolutionTests
             InputTranslate = new HotkeyGesture(safeModifiers, vkF14),
             ScreenshotTranslate = new HotkeyGesture(safeModifiers, vkF15),
             SelectionPolish = new HotkeyGesture(safeModifiers, vkF16),
+            SilentOcr = new HotkeyGesture(safeModifiers, vkF17),
         };
 
         var results = hotkeyService.ApplyHotkeys(config);
 
-        Assert.Equal(4, results.Count);
+        Assert.Equal(5, results.Count);
         Assert.True(results[HotkeyAction.SelectionTranslate].Succeeded, results[HotkeyAction.SelectionTranslate].ErrorMessage);
         Assert.True(results[HotkeyAction.InputTranslate].Succeeded, results[HotkeyAction.InputTranslate].ErrorMessage);
         Assert.True(results[HotkeyAction.ScreenshotTranslate].Succeeded, results[HotkeyAction.ScreenshotTranslate].ErrorMessage);
         Assert.True(results[HotkeyAction.SelectionPolish].Succeeded, results[HotkeyAction.SelectionPolish].ErrorMessage);
+        Assert.True(results[HotkeyAction.SilentOcr].Succeeded, results[HotkeyAction.SilentOcr].ErrorMessage);
 
         // Duplicate SelectionPolish gesture must report internal conflict against SelectionTranslate
         var conflictConfig = config.Clone();
         conflictConfig.SelectionPolish = config.SelectionTranslate;
         var conflictResults = hotkeyService.ApplyHotkeys(conflictConfig);
 
-        Assert.Equal(4, conflictResults.Count);
+        Assert.Equal(5, conflictResults.Count);
         Assert.True(conflictResults[HotkeyAction.SelectionTranslate].Succeeded, conflictResults[HotkeyAction.SelectionTranslate].ErrorMessage);
         Assert.False(conflictResults[HotkeyAction.SelectionPolish].Succeeded);
         Assert.Contains("SelectionTranslate", conflictResults[HotkeyAction.SelectionPolish].ErrorMessage ?? string.Empty, StringComparison.Ordinal);

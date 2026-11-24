@@ -14,6 +14,7 @@ public sealed partial class SettingsWindow : WindowEx
 {
     private readonly nint _hwnd;
     private bool _hasCenteredOnce;
+    private bool _suppressTabFlush;
 
     public SettingsWindow(SettingsViewModel viewModel)
     {
@@ -27,12 +28,17 @@ public sealed partial class SettingsWindow : WindowEx
 
         _hwnd = this.GetWindowHandle();
 
-        AppWindow.Closing += (_, args) =>
+        AppWindow.Closing += async (_, args) =>
         {
             if (!AllowClose)
             {
                 args.Cancel = true;
                 AppWindow.Hide();
+                await ViewModel.FlushPendingChangesAsync();
+            }
+            else
+            {
+                await ViewModel.FlushPendingChangesAsync();
             }
         };
 
@@ -49,10 +55,19 @@ public sealed partial class SettingsWindow : WindowEx
 
     public async Task ShowAndRefreshAsync(string? initialPageTag = null)
     {
+        await ViewModel.FlushPendingChangesAsync();
         await ViewModel.RefreshAllAsync();
 
         var tag = string.IsNullOrWhiteSpace(initialPageTag) ? ViewModel.SelectedPageTag : initialPageTag;
-        SelectNavigationItem(tag);
+        _suppressTabFlush = true;
+        try
+        {
+            SelectNavigationItem(tag);
+        }
+        finally
+        {
+            _suppressTabFlush = false;
+        }
 
         if (!_hasCenteredOnce)
         {
@@ -82,10 +97,15 @@ public sealed partial class SettingsWindow : WindowEx
         }
     }
 
-    private void SettingsNavView_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
+    private async void SettingsNavView_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
     {
         if (args.SelectedItemContainer is NavigationViewItem { Tag: string tag })
         {
+            if (!_suppressTabFlush)
+            {
+                await ViewModel.FlushPendingChangesAsync();
+            }
+
             ViewModel.SelectedPageTag = tag;
             NavigateByTag(tag);
         }

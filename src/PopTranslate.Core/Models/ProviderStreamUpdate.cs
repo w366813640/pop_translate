@@ -19,4 +19,5 @@ public sealed record ProviderStreamUpdate(
     LanguageCode? DetectedSourceLanguage,
     LanguageCode TargetLanguage,
     string? ErrorMessage,
-    TimeSpan Elapsed);
+    TimeSpan Elapsed,
+    bool IsReasoning = false);

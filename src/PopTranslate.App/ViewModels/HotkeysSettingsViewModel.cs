@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using PopTranslate.Core.Contracts;
 using PopTranslate.Core.Models;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -8,6 +9,23 @@ namespace PopTranslate.App.ViewModels;
 
 public sealed partial class HotkeysSettingsViewModel : ObservableObject
 {
+    private static readonly HashSet<string> IgnoredSystemWindowProcesses = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "explorer.exe",
+        "ApplicationFrameHost.exe",
+        "TextInputHost.exe",
+        "SearchHost.exe",
+        "StartMenuExperienceHost.exe",
+        "ShellExperienceHost.exe",
+        "SystemSettings.exe",
+        "LockApp.exe",
+        "dwm.exe",
+        "sihost.exe",
+        "taskhostw.exe",
+        "ctfmon.exe",
+        "PopTranslate.exe",
+    };
+
     private readonly ISettingsStore _settingsStore;
     private bool _isLoading;
 
@@ -28,6 +46,9 @@ public sealed partial class HotkeysSettingsViewModel : ObservableObject
     public partial HotkeyGesture ScreenshotTranslateGesture { get; set; } = HotkeyConfig.DefaultScreenshotTranslate;
 
     [ObservableProperty]
+    public partial HotkeyGesture SilentOcrGesture { get; set; } = HotkeyConfig.DefaultSilentOcr;
+
+    [ObservableProperty]
     public partial HotkeyGesture SelectionPolishGesture { get; set; } = HotkeyConfig.DefaultSelectionPolish;
 
     [ObservableProperty]
@@ -40,10 +61,19 @@ public sealed partial class HotkeysSettingsViewModel : ObservableObject
     public partial string? ScreenshotHotkeyError { get; set; }
 
     [ObservableProperty]
+    public partial string? SilentOcrHotkeyError { get; set; }
+
+    [ObservableProperty]
     public partial string? SelectionPolishHotkeyError { get; set; }
 
     [ObservableProperty]
+    public partial bool EnableDoubleTapCopy { get; set; }
+
+    [ObservableProperty]
     public partial bool EnableHoverIcon { get; set; } = true;
+
+    [ObservableProperty]
+    public partial bool RequireCtrlForHover { get; set; }
 
     [ObservableProperty]
     public partial bool EnableClipboardFallback { get; set; } = true;
@@ -77,9 +107,12 @@ public sealed partial class HotkeysSettingsViewModel : ObservableObject
             SelectionTranslateGesture = settings.Hotkeys.SelectionTranslate;
             InputTranslateGesture = settings.Hotkeys.InputTranslate;
             ScreenshotTranslateGesture = settings.Hotkeys.ScreenshotTranslate;
+            SilentOcrGesture = settings.Hotkeys.SilentOcr;
             SelectionPolishGesture = settings.Hotkeys.SelectionPolish;
+            EnableDoubleTapCopy = settings.Hotkeys.EnableDoubleTapCopy;
 
             EnableHoverIcon = settings.Selection.EnableHoverIcon;
+            RequireCtrlForHover = settings.Selection.RequireCtrlForHover;
             EnableClipboardFallback = settings.Selection.EnableClipboardFallback;
             QuietModeInFullscreen = settings.Selection.QuietModeInFullscreen;
             HoverIconAutoDismissMs = Math.Clamp(settings.Selection.HoverIconAutoDismissMs, 1500, 15000);
@@ -108,6 +141,7 @@ public sealed partial class HotkeysSettingsViewModel : ObservableObject
         SelectionHotkeyError = ExtractError(results, HotkeyAction.SelectionTranslate);
         InputHotkeyError = ExtractError(results, HotkeyAction.InputTranslate);
         ScreenshotHotkeyError = ExtractError(results, HotkeyAction.ScreenshotTranslate);
+        SilentOcrHotkeyError = ExtractError(results, HotkeyAction.SilentOcr);
         SelectionPolishHotkeyError = ExtractError(results, HotkeyAction.SelectionPolish);
     }
 
@@ -124,6 +158,9 @@ public sealed partial class HotkeysSettingsViewModel : ObservableObject
             case HotkeyAction.ScreenshotTranslate:
                 ScreenshotTranslateGesture = gesture;
                 break;
+            case HotkeyAction.SilentOcr:
+                SilentOcrGesture = gesture;
+                break;
             case HotkeyAction.SelectionPolish:
                 SelectionPolishGesture = gesture;
                 break;
@@ -132,14 +169,73 @@ public sealed partial class HotkeysSettingsViewModel : ObservableObject
         SaveIfReady();
     }
 
+    public IReadOnlyList<string> GetRunningWindowProcessNames()
+    {
+        var discovered = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var currentPid = Environment.ProcessId;
+        Process[] processes;
+        try
+        {
+            processes = Process.GetProcesses();
+        }
+        catch
+        {
+            return [];
+        }
+
+        foreach (var proc in processes)
+        {
+            try
+            {
+                if (proc.Id == currentPid || proc.MainWindowHandle == nint.Zero)
+                {
+                    continue;
+                }
+
+                var rawName = proc.ProcessName?.Trim();
+                if (string.IsNullOrWhiteSpace(rawName))
+                {
+                    continue;
+                }
+
+                var exeName = rawName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
+                    ? rawName
+                    : $"{rawName}.exe";
+
+                if (IgnoredSystemWindowProcesses.Contains(exeName))
+                {
+                    continue;
+                }
+
+                if (ProcessBlacklist.Any(x => string.Equals(x, exeName, StringComparison.OrdinalIgnoreCase)))
+                {
+                    continue;
+                }
+
+                discovered.Add(exeName);
+            }
+            catch
+            {
+                // Ignore protected or exiting processes.
+            }
+            finally
+            {
+                proc.Dispose();
+            }
+        }
+
+        return discovered.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
     [RelayCommand]
     private void ResetDefaultHotkeys()
     {
         SelectionTranslateGesture = HotkeyConfig.DefaultSelectionTranslate;
         InputTranslateGesture = HotkeyConfig.DefaultInputTranslate;
         ScreenshotTranslateGesture = HotkeyConfig.DefaultScreenshotTranslate;
+        SilentOcrGesture = HotkeyConfig.DefaultSilentOcr;
         SelectionPolishGesture = HotkeyConfig.DefaultSelectionPolish;
-        StatusMessage = "已恢复默认全局快捷键（Alt+D / Alt+A / Alt+S / Alt+P）。";
+        StatusMessage = "已恢复默认全局快捷键（Alt+D / Alt+A / Alt+S / Alt+Shift+S / Alt+P）。";
         SaveIfReady();
     }
 
@@ -160,6 +256,24 @@ public sealed partial class HotkeysSettingsViewModel : ObservableObject
         }
 
         NewBlacklistProcessName = string.Empty;
+    }
+
+    [RelayCommand]
+    private void AddRunningBlacklistProcess(string? processName)
+    {
+        if (string.IsNullOrWhiteSpace(processName))
+        {
+            return;
+        }
+
+        var raw = processName.Trim();
+        var normalized = raw.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? raw : $"{raw}.exe";
+        if (!ProcessBlacklist.Any(x => string.Equals(x, normalized, StringComparison.OrdinalIgnoreCase)))
+        {
+            ProcessBlacklist.Add(normalized);
+            StatusMessage = $"已将「{normalized}」加入划词忽略黑名单。";
+            SaveIfReady();
+        }
     }
 
     [RelayCommand]
@@ -189,7 +303,9 @@ public sealed partial class HotkeysSettingsViewModel : ObservableObject
         SaveIfReady();
     }
 
+    partial void OnEnableDoubleTapCopyChanged(bool value) => SaveIfReady();
     partial void OnEnableHoverIconChanged(bool value) => SaveIfReady();
+    partial void OnRequireCtrlForHoverChanged(bool value) => SaveIfReady();
     partial void OnEnableClipboardFallbackChanged(bool value) => SaveIfReady();
     partial void OnQuietModeInFullscreenChanged(bool value) => SaveIfReady();
     partial void OnHoverIconAutoDismissMsChanged(double value) => SaveIfReady();
@@ -214,9 +330,12 @@ public sealed partial class HotkeysSettingsViewModel : ObservableObject
             updated.Hotkeys.SelectionTranslate = SelectionTranslateGesture;
             updated.Hotkeys.InputTranslate = InputTranslateGesture;
             updated.Hotkeys.ScreenshotTranslate = ScreenshotTranslateGesture;
+            updated.Hotkeys.SilentOcr = SilentOcrGesture;
             updated.Hotkeys.SelectionPolish = SelectionPolishGesture;
+            updated.Hotkeys.EnableDoubleTapCopy = EnableDoubleTapCopy;
 
             updated.Selection.EnableHoverIcon = EnableHoverIcon;
+            updated.Selection.RequireCtrlForHover = RequireCtrlForHover;
             updated.Selection.EnableClipboardFallback = EnableClipboardFallback;
             updated.Selection.QuietModeInFullscreen = QuietModeInFullscreen;
             updated.Selection.HoverIconAutoDismissMs = double.IsNaN(HoverIconAutoDismissMs)

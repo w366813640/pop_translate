@@ -6,4 +6,5 @@ public enum HotkeyAction
     InputTranslate = 1,
     ScreenshotTranslate = 2,
     SelectionPolish = 3,
+    SilentOcr = 4,
 }

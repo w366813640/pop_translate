@@ -83,6 +83,7 @@ public sealed class HotkeyConfig
     public static readonly HotkeyGesture DefaultInputTranslate = new(HotkeyModifiers.Alt, 0x41); // Alt + A
     public static readonly HotkeyGesture DefaultScreenshotTranslate = new(HotkeyModifiers.Alt, 0x53); // Alt + S
     public static readonly HotkeyGesture DefaultSelectionPolish = new(HotkeyModifiers.Alt, 0x50); // Alt + P
+    public static readonly HotkeyGesture DefaultSilentOcr = new(HotkeyModifiers.Alt | HotkeyModifiers.Shift, 0x53); // Alt + Shift + S
 
     public HotkeyGesture SelectionTranslate { get; set; } = DefaultSelectionTranslate;
 
@@ -92,12 +93,18 @@ public sealed class HotkeyConfig
 
     public HotkeyGesture SelectionPolish { get; set; } = DefaultSelectionPolish;
 
+    public HotkeyGesture SilentOcr { get; set; } = DefaultSilentOcr;
+
+    public bool EnableDoubleTapCopy { get; set; } = false;
+
     public HotkeyConfig Clone() => new()
     {
         SelectionTranslate = SelectionTranslate ?? DefaultSelectionTranslate,
         InputTranslate = InputTranslate ?? DefaultInputTranslate,
         ScreenshotTranslate = ScreenshotTranslate ?? DefaultScreenshotTranslate,
         SelectionPolish = SelectionPolish ?? DefaultSelectionPolish,
+        SilentOcr = SilentOcr ?? DefaultSilentOcr,
+        EnableDoubleTapCopy = EnableDoubleTapCopy,
     };
 }
 

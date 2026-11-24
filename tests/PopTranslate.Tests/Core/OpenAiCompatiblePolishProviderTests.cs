@@ -37,15 +37,17 @@ public sealed class OpenAiCompatiblePolishProviderTests
         Assert.Contains("business", business, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("casual", casual, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("concise", concise, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal("Rewrite like a technical spec.", custom);
-        Assert.Equal(PolishConfig.DefaultCustomPrompt, customFallback);
+        Assert.StartsWith("Rewrite like a technical spec.", custom, StringComparison.Ordinal);
+        Assert.Contains("original language", custom, StringComparison.OrdinalIgnoreCase);
+        Assert.StartsWith(PolishConfig.DefaultCustomPrompt, customFallback, StringComparison.Ordinal);
 
-        // Preferred language suffix appended to non-custom presets only
+        // Preferred language suffix appended to presets and custom prompts
         var academicEnglish = PolishPromptTemplates.ResolveSystemPrompt(PolishStyle.Academic, null, LanguageCode.English);
         Assert.EndsWith("Keep the output strictly in English.", academicEnglish, StringComparison.Ordinal);
 
         var customWithLang = PolishPromptTemplates.ResolveSystemPrompt(PolishStyle.Custom, "Custom only", LanguageCode.English);
-        Assert.Equal("Custom only", customWithLang);
+        Assert.StartsWith("Custom only", customWithLang, StringComparison.Ordinal);
+        Assert.Contains("English", customWithLang, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -110,11 +112,13 @@ public sealed class OpenAiCompatiblePolishProviderTests
         Assert.True(bodyDoc.RootElement.GetProperty("stream").GetBoolean());
 
         var messages = bodyDoc.RootElement.GetProperty("messages");
-        var sentSystem = messages[0].GetProperty("content").GetString();
-        Assert.Equal(
+        var sentSystem = messages[0].GetProperty("content").GetString() ?? string.Empty;
+        Assert.StartsWith(
             PolishPromptTemplates.ResolveSystemPrompt(PolishStyle.Concise, null, LanguageCode.English),
-            sentSystem);
-        Assert.Equal(request.Text, messages[1].GetProperty("content").GetString());
+            sentSystem,
+            StringComparison.Ordinal);
+        Assert.Contains("<source_text>", sentSystem, StringComparison.Ordinal);
+        Assert.Equal($"<source_text>\n{request.Text}\n</source_text>", messages[1].GetProperty("content").GetString());
 
         Assert.Equal(
             ["This report ", "is concise and clear."],
@@ -173,9 +177,9 @@ public sealed class OpenAiCompatiblePolishProviderTests
 
         Assert.NotNull(capturedBody);
         using var doc = JsonDocument.Parse(capturedBody!);
-        Assert.Equal(
-            "请改写成正式礼貌的中文客服回复，只输出改写结果。",
-            doc.RootElement.GetProperty("messages")[0].GetProperty("content").GetString());
+        var sentCustomSystem = doc.RootElement.GetProperty("messages")[0].GetProperty("content").GetString() ?? string.Empty;
+        Assert.StartsWith("请改写成正式礼貌的中文客服回复，只输出改写结果。", sentCustomSystem, StringComparison.Ordinal);
+        Assert.Contains("<source_text>", sentCustomSystem, StringComparison.Ordinal);
     }
 
     [Theory]

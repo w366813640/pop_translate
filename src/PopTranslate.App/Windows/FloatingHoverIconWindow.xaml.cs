@@ -1,7 +1,6 @@
 using PopTranslate.App.Services;
 using PopTranslate.Core.Contracts;
 using PopTranslate.Core.Models;
-using Microsoft.UI.Dispatching;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Input;
@@ -13,12 +12,19 @@ namespace PopTranslate.App.Windows;
 
 public sealed partial class FloatingHoverIconWindow : WindowEx
 {
-    private const double IconSizeDips = 34;
+    private const double CompactWidthDips = 34;
+    private const double ExpandedWidthDips = 72;
+    private const double PillHeightDips = 34;
 
     private readonly IWindowHelperService _windowHelperService;
     private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _autoHideTimer;
     private nint _hwnd;
+    private ScreenPoint _currentPosPx;
+    private double _currentScale = 1.0;
+    private string? _sourceProcessName;
+    private bool _isExpanded;
     private bool _isPointerHovering;
+    private bool _isContextMenuOpen;
     private bool _isVisible;
 
     public FloatingHoverIconWindow(IWindowHelperService windowHelperService)
@@ -36,7 +42,7 @@ public sealed partial class FloatingHoverIconWindow : WindowEx
         _autoHideTimer.IsRepeating = false;
         _autoHideTimer.Tick += (_, _) =>
         {
-            if (!_isPointerHovering)
+            if (!_isPointerHovering && !_isContextMenuOpen)
             {
                 HideIcon();
             }
@@ -55,6 +61,11 @@ public sealed partial class FloatingHoverIconWindow : WindowEx
     }
 
     public event EventHandler? IconClicked;
+    public event EventHandler? TranslateClicked;
+    public event EventHandler? PolishClicked;
+    public event EventHandler<string>? BlacklistProcessRequested;
+    public event EventHandler<TimeSpan>? MuteHoverRequested;
+    public event EventHandler? DisableHoverIconRequested;
 
     public bool AllowClose { get; set; }
 
@@ -65,24 +76,34 @@ public sealed partial class FloatingHoverIconWindow : WindowEx
     public void PreWarm()
     {
         ConfigureWindowChrome();
+        SetExpandedVisualState(expanded: false);
         AppWindow.Hide();
         _isVisible = false;
     }
 
-    public void ShowAt(ScreenPoint anchorPoint, int autoDismissMs)
+    public void ShowAt(ScreenPoint anchorPoint, int autoDismissMs, string? sourceProcessName = null)
     {
+        _sourceProcessName = NormalizeProcessDisplayName(sourceProcessName);
+        UpdateContextMenuProcessItem();
+        SetExpandedVisualState(expanded: false);
+
         var monitor = _windowHelperService.GetMonitorAtPoint(anchorPoint);
         var scale = monitor.DpiScale > 0 ? monitor.DpiScale : 1.0;
-        var sizePx = Math.Max(28, (int)Math.Ceiling(IconSizeDips * scale));
+        _currentScale = scale;
+
+        var widthPx = Math.Max(28, (int)Math.Ceiling(CompactWidthDips * scale));
+        var heightPx = Math.Max(28, (int)Math.Ceiling(PillHeightDips * scale));
+        var cursorOffsetPx = Math.Max(8, (int)Math.Round(14 * scale));
 
         var pos = _windowHelperService.CalculateClampedWindowPosition(
             anchorPoint,
-            sizePx,
-            sizePx,
-            cursorOffsetPx: 14);
+            widthPx,
+            heightPx,
+            cursorOffsetPx: cursorOffsetPx);
+        _currentPosPx = pos;
 
         _windowHelperService.ConfigureNoActivateOverlayWindow(_hwnd);
-        _windowHelperService.MoveAndResizeWindow(_hwnd, pos.X, pos.Y, sizePx, sizePx, activate: false);
+        _windowHelperService.MoveAndResizeWindow(_hwnd, pos.X, pos.Y, widthPx, heightPx, activate: false);
         _windowHelperService.ShowWindowNoActivate(_hwnd);
 
         _isVisible = true;
@@ -93,6 +114,13 @@ public sealed partial class FloatingHoverIconWindow : WindowEx
     {
         _autoHideTimer.Stop();
         _isPointerHovering = false;
+        _isContextMenuOpen = false;
+        if (HoverContextFlyout.IsOpen)
+        {
+            HoverContextFlyout.Hide();
+        }
+
+        SetExpandedVisualState(expanded: false);
 
         if (!_isVisible && !AppWindow.IsVisible)
         {
@@ -103,10 +131,91 @@ public sealed partial class FloatingHoverIconWindow : WindowEx
         AppWindow.Hide();
     }
 
+    private void ExpandPillToDualActions()
+    {
+        if (_isExpanded || !_isVisible)
+        {
+            return;
+        }
+
+        SetExpandedVisualState(expanded: true);
+
+        var scale = _currentScale > 0 ? _currentScale : _windowHelperService.GetDpiScaleForWindow(_hwnd);
+        if (scale <= 0)
+        {
+            scale = 1.0;
+        }
+
+        var expandedWidthPx = Math.Max(56, (int)Math.Ceiling(ExpandedWidthDips * scale));
+        var heightPx = Math.Max(28, (int)Math.Ceiling(PillHeightDips * scale));
+
+        var targetX = _currentPosPx.X;
+        var targetY = _currentPosPx.Y;
+
+        var monitor = _windowHelperService.GetMonitorAtPoint(_currentPosPx);
+        var work = monitor.WorkArea;
+        if (!work.IsEmpty && targetX + expandedWidthPx > work.Right)
+        {
+            targetX = Math.Max(work.X, work.Right - expandedWidthPx);
+        }
+
+        _currentPosPx = new ScreenPoint(targetX, targetY);
+        _windowHelperService.MoveAndResizeWindow(_hwnd, targetX, targetY, expandedWidthPx, heightPx, activate: false);
+    }
+
+    private void SetExpandedVisualState(bool expanded)
+    {
+        _isExpanded = expanded;
+        if (expanded)
+        {
+            PolishColumn.Width = new GridLength(1, GridUnitType.Star);
+            ActionDivider.Visibility = Visibility.Visible;
+            PolishActionButton.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            PolishColumn.Width = new GridLength(0, GridUnitType.Pixel);
+            ActionDivider.Visibility = Visibility.Collapsed;
+            PolishActionButton.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private void UpdateContextMenuProcessItem()
+    {
+        if (!string.IsNullOrWhiteSpace(_sourceProcessName))
+        {
+            BlacklistCurrentAppMenuItem.Text = $"屏蔽当前应用 ({_sourceProcessName})";
+            BlacklistCurrentAppMenuItem.IsEnabled = true;
+            BlacklistCurrentAppMenuItem.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            BlacklistCurrentAppMenuItem.Text = "屏蔽当前应用";
+            BlacklistCurrentAppMenuItem.IsEnabled = false;
+            BlacklistCurrentAppMenuItem.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private static string? NormalizeProcessDisplayName(string? processName)
+    {
+        if (string.IsNullOrWhiteSpace(processName))
+        {
+            return null;
+        }
+
+        var trimmed = Path.GetFileName(processName.Trim());
+        if (string.IsNullOrWhiteSpace(trimmed))
+        {
+            return null;
+        }
+
+        return trimmed.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
+            ? trimmed
+            : $"{trimmed}.exe";
+    }
+
     private void ConfigureWindowChrome()
     {
-        // Best-effort: ITaskbarList may be unavailable before Explorer starts or in non-shell sessions.
-        // Win32 WS_EX_TOOLWINDOW applied below natively hides this window from taskbar & Alt+Tab.
         try
         {
             IsShownInSwitchers = false;
@@ -138,22 +247,67 @@ public sealed partial class FloatingHoverIconWindow : WindowEx
         _autoHideTimer.Start();
     }
 
-    private void HoverButton_Click(object sender, RoutedEventArgs e)
+    private void TranslateActionButton_Click(object sender, RoutedEventArgs e)
     {
         HideIcon();
+        TranslateClicked?.Invoke(this, EventArgs.Empty);
         IconClicked?.Invoke(this, EventArgs.Empty);
     }
 
-    private void HoverButton_PointerEntered(object sender, PointerRoutedEventArgs e)
+    private void PolishActionButton_Click(object sender, RoutedEventArgs e)
     {
-        _isPointerHovering = true;
+        HideIcon();
+        PolishClicked?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void BlacklistCurrentAppMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        var processName = _sourceProcessName;
+        HideIcon();
+        if (!string.IsNullOrWhiteSpace(processName))
+        {
+            BlacklistProcessRequested?.Invoke(this, processName);
+        }
+    }
+
+    private void MuteHover30MinMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        HideIcon();
+        MuteHoverRequested?.Invoke(this, TimeSpan.FromMinutes(30));
+    }
+
+    private void DisableHoverIconMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        HideIcon();
+        DisableHoverIconRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void HoverContextFlyout_Opening(object? sender, object e)
+    {
+        _isContextMenuOpen = true;
         _autoHideTimer.Stop();
     }
 
-    private void HoverButton_PointerExited(object sender, PointerRoutedEventArgs e)
+    private void HoverContextFlyout_Closed(object? sender, object e)
+    {
+        _isContextMenuOpen = false;
+        if (_isVisible && !_isPointerHovering)
+        {
+            RestartAutoHideTimer(1800);
+        }
+    }
+
+    private void RootGrid_PointerEntered(object sender, PointerRoutedEventArgs e)
+    {
+        _isPointerHovering = true;
+        _autoHideTimer.Stop();
+        ExpandPillToDualActions();
+    }
+
+    private void RootGrid_PointerExited(object sender, PointerRoutedEventArgs e)
     {
         _isPointerHovering = false;
-        if (_isVisible)
+        if (_isVisible && !_isContextMenuOpen)
         {
             RestartAutoHideTimer(1800);
         }

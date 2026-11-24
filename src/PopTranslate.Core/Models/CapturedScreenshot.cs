@@ -5,7 +5,9 @@ public sealed record CapturedScreenshot(
     ScreenRect CaptureBounds,
     double DpiScale,
     int PixelWidth,
-    int PixelHeight)
+    int PixelHeight,
+    byte[]? RawBgraBytes = null,
+    bool CopyOnly = false)
 {
     public OcrImage ToOcrImage(LanguageCode? preferredLanguage = null) =>
         new(
@@ -14,5 +16,6 @@ public sealed record CapturedScreenshot(
             PixelHeight: PixelHeight,
             DpiScale: DpiScale,
             MimeType: "image/png",
-            PreferredLanguage: preferredLanguage);
+            PreferredLanguage: preferredLanguage,
+            RawBgraBytes: RawBgraBytes);
 }

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using PopTranslate.Core.Contracts;
 using PopTranslate.Core.Models;
@@ -109,39 +110,51 @@ public sealed class LocalTextDiffService : ITextDiffService
                 continue;
             }
 
-            // Preserve UTF-16 surrogate pairs (emojis, CJK Extension B-G) as atomic tokens
-            if (char.IsHighSurrogate(c) && i + 1 < text.Length && char.IsLowSurrogate(text[i + 1]))
-            {
-                tokens.Add(text.Substring(i, 2));
-                i += 2;
-                continue;
-            }
-
-            // Individual CJK ideographs / Kana / Hangul
-            if (IsCjk(c))
-            {
-                tokens.Add(text.Substring(i, 1));
-                i++;
-                continue;
-            }
-
-            // Contiguous Western words / digits
+            // Contiguous Western words / digits (keeping internal apostrophes like don't / can’t intact)
             if (IsWesternWordChar(c))
             {
                 var start = i;
                 i++;
-                while (i < text.Length && IsWesternWordChar(text[i]))
+                while (i < text.Length)
                 {
-                    i++;
+                    var next = text[i];
+                    if (IsWesternWordChar(next))
+                    {
+                        i++;
+                        continue;
+                    }
+
+                    if (next is '\'' or '\u2019' &&
+                        i + 1 < text.Length &&
+                        IsWesternWordChar(text[i + 1]))
+                    {
+                        i++;
+                        continue;
+                    }
+
+                    var category = CharUnicodeInfo.GetUnicodeCategory(next);
+                    if (category is UnicodeCategory.NonSpacingMark or UnicodeCategory.SpacingCombiningMark)
+                    {
+                        i++;
+                        continue;
+                    }
+
+                    break;
                 }
 
                 tokens.Add(text[start..i]);
                 continue;
             }
 
-            // Punctuation and symbols (individual character tokens)
-            tokens.Add(text.Substring(i, 1));
-            i++;
+            // Preserve extended grapheme clusters (CJK/Kana, ZWJ/skin-tone emojis, variation selectors) as atomic tokens
+            var elementLength = StringInfo.GetNextTextElementLength(text, i);
+            if (elementLength <= 0)
+            {
+                elementLength = 1;
+            }
+
+            tokens.Add(text.Substring(i, elementLength));
+            i += elementLength;
         }
 
         return tokens;
@@ -157,6 +170,7 @@ public sealed class LocalTextDiffService : ITextDiffService
         (c >= '\u3040' && c <= '\u309F') || // Hiragana
         (c >= '\u30A0' && c <= '\u30FF') || // Katakana
         (c >= '\u31F0' && c <= '\u31FF') || // Katakana Phonetic Extensions
+        (c >= '\uFF66' && c <= '\uFF9F') || // Halfwidth Katakana
         (c >= '\uAC00' && c <= '\uD7AF') || // Hangul Syllables
         (c >= '\u1100' && c <= '\u11FF') || // Hangul Jamo
         (c >= '\u3130' && c <= '\u318F');   // Hangul Compatibility Jamo
@@ -491,8 +505,69 @@ public sealed class LocalTextDiffService : ITextDiffService
         FlushEqual();
         FlushEdits();
 
-        return result;
+        return CleanupSemanticChaff(result);
     }
+
+    private static IReadOnlyList<DiffSegment> CleanupSemanticChaff(List<DiffSegment> coalesced)
+    {
+        if (coalesced.Count < 5)
+        {
+            return coalesced;
+        }
+
+        var cleaned = new List<DiffSegment>(coalesced.Count);
+        for (var i = 0; i < coalesced.Count; i++)
+        {
+            var current = coalesced[i];
+            if (current.Operation == DiffOperation.Equal &&
+                IsChaffEqualIsland(current.Text) &&
+                cleaned.Count >= 2 &&
+                cleaned[^2].Operation == DiffOperation.Delete &&
+                cleaned[^1].Operation == DiffOperation.Insert &&
+                i + 2 < coalesced.Count &&
+                coalesced[i + 1].Operation == DiffOperation.Delete &&
+                coalesced[i + 2].Operation == DiffOperation.Insert)
+            {
+                var eq = current.Text;
+                var mergedDelete = string.Concat(cleaned[^2].Text, eq, coalesced[i + 1].Text);
+                var mergedInsert = string.Concat(cleaned[^1].Text, eq, coalesced[i + 2].Text);
+                cleaned[^2] = new DiffSegment(DiffOperation.Delete, mergedDelete);
+                cleaned[^1] = new DiffSegment(DiffOperation.Insert, mergedInsert);
+                i += 2;
+                continue;
+            }
+
+            cleaned.Add(current);
+        }
+
+        return cleaned;
+    }
+
+    private static bool IsChaffEqualIsland(string text)
+    {
+        if (text == " ")
+        {
+            return true;
+        }
+
+        if (text.Length == 1 && IsCjk(text[0]))
+        {
+            return true;
+        }
+
+        if (text.Length == 2 &&
+            Rune.TryGetRuneAt(text, 0, out var rune) &&
+            rune.Utf16SequenceLength == 2 &&
+            IsSupplementaryCjkRune(rune.Value))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsSupplementaryCjkRune(int codePoint) =>
+        codePoint is (>= 0x20000 and <= 0x2CEAF) or (>= 0x2EBE0 and <= 0x323AF);
 
     private static string ConcatSlice(IReadOnlyList<string> items, int start, int count)
     {

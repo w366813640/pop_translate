@@ -41,7 +41,10 @@ artifacts/
 *.key
 *.pem
 settings.json
+*.corrupt
 appsettings.*.json
+data/
+portable
 
 ## OS / Editors
 .DS_Store

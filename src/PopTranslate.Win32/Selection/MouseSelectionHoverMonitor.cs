@@ -14,7 +14,9 @@ public sealed class MouseSelectionHoverMonitor : ISelectionHoverMonitor
 {
     private const uint WmQuit = 0x0012;
     private const uint WmKeyDown = 0x0100;
+    private const uint WmKeyUp = 0x0101;
     private const uint WmSysKeyDown = 0x0104;
+    private const uint WmSysKeyUp = 0x0105;
     private const uint WmLButtonDown = 0x0201;
     private const uint WmLButtonUp = 0x0202;
     private const uint WmRButtonDown = 0x0204;
@@ -23,10 +25,14 @@ public sealed class MouseSelectionHoverMonitor : ISelectionHoverMonitor
     private const uint WmMouseHWheel = 0x020E;
     private const uint LlmhfInjected = 0x00000001;
     private const uint LlkhfInjected = 0x00000010;
+    private const uint CursorShowingFlag = 0x00000001;
+    private const uint VkC = 0x43;
     private const int MinDragDurationMs = 40;
     private const int MaxDragDurationMs = 10_000;
     private const int DoubleClickRadiusPx = 6;
     private const int SelectionSettleDelayMs = 35;
+    private const int DoubleTapMinIntervalMs = 25;
+    private const int DoubleTapMaxIntervalMs = 420;
 
     private static readonly HashSet<string> KnownSelectableCanvasClasses = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -52,6 +58,8 @@ public sealed class MouseSelectionHoverMonitor : ISelectionHoverMonitor
     private readonly HOOKPROC _keyboardHookDelegate;
 
     private volatile SelectionConfig _config = new();
+    private volatile bool _doubleTapCopyEnabled;
+    private volatile bool _isVkCDown;
     private Channel<HookEvent>? _eventChannel;
     private CancellationTokenSource? _consumerCts;
     private Task? _consumerTask;
@@ -78,6 +86,13 @@ public sealed class MouseSelectionHoverMonitor : ISelectionHoverMonitor
     public event EventHandler<HoverSelectionEventArgs>? SelectionDetected;
 
     public event EventHandler? DismissRequested;
+
+    public event EventHandler<nint>? DoubleTapCopyDetected;
+
+    public void SetDoubleTapCopyEnabled(bool enabled)
+    {
+        _doubleTapCopyEnabled = enabled;
+    }
 
     public static bool IsDragSelectionGesture(
         ScreenPoint downPoint,
@@ -123,6 +138,17 @@ public sealed class MouseSelectionHoverMonitor : ISelectionHoverMonitor
         return dx * dx + dy * dy <= maxRadiusPx * maxRadiusPx;
     }
 
+    public static bool IsDoubleTapCopyInterval(long firstPressTimestampMs, long secondPressTimestampMs)
+    {
+        if (firstPressTimestampMs <= 0)
+        {
+            return false;
+        }
+
+        var deltaMs = secondPressTimestampMs - firstPressTimestampMs;
+        return deltaMs is >= DoubleTapMinIntervalMs and <= DoubleTapMaxIntervalMs;
+    }
+
     public static bool IsKnownSelectableCanvasClass(string? className)
     {
         if (string.IsNullOrWhiteSpace(className))
@@ -147,6 +173,7 @@ public sealed class MouseSelectionHoverMonitor : ISelectionHoverMonitor
                 return;
             }
 
+            _isVkCDown = false;
             _eventChannel = Channel.CreateUnbounded<HookEvent>(new UnboundedChannelOptions
             {
                 SingleReader = true,
@@ -201,6 +228,7 @@ public sealed class MouseSelectionHoverMonitor : ISelectionHoverMonitor
             }
 
             _isRunning = false;
+            _isVkCDown = false;
             threadToJoin = _hookThread;
             nativeThreadId = _hookThreadNativeId;
             _hookThread = null;
@@ -255,8 +283,41 @@ public sealed class MouseSelectionHoverMonitor : ISelectionHoverMonitor
         }
     }
 
-    public bool IsWindowIgnored(nint windowHandle) =>
-        windowHandle != nint.Zero && _ignoredWindows.ContainsKey(windowHandle);
+    public unsafe bool IsWindowIgnored(nint windowHandle)
+    {
+        if (windowHandle == nint.Zero)
+        {
+            return false;
+        }
+
+        if (_ignoredWindows.ContainsKey(windowHandle))
+        {
+            return true;
+        }
+
+        if (_ignoredWindows.IsEmpty)
+        {
+            return false;
+        }
+
+        var hwnd = new HWND(windowHandle);
+        if (!PInvoke.IsWindow(hwnd))
+        {
+            return false;
+        }
+
+        var rootOwner = PInvoke.GetAncestor(hwnd, GET_ANCESTOR_FLAGS.GA_ROOTOWNER);
+        if (rootOwner != HWND.Null && _ignoredWindows.ContainsKey((nint)rootOwner))
+        {
+            return true;
+        }
+
+        // Also ignore transient WinUI 3 windowed popups (MenuFlyout, ComboBox dropdowns, tray flyouts)
+        // owned by PopTranslate's own process once application windows have been registered.
+        uint pid = 0;
+        PInvoke.GetWindowThreadProcessId(hwnd, &pid);
+        return pid != 0 && pid == (uint)Environment.ProcessId;
+    }
 
     public void Dispose()
     {
@@ -357,12 +418,14 @@ public sealed class MouseSelectionHoverMonitor : ISelectionHoverMonitor
                         _ => HookEventKind.MouseWheel,
                     };
 
+                    var ctrlDown = msg == WmLButtonUp && IsControlPressed();
                     _eventChannel?.Writer.TryWrite(new HookEvent(
                         kind,
                         info->pt.X,
                         info->pt.Y,
                         0,
-                        Environment.TickCount64));
+                        Environment.TickCount64,
+                        ctrlDown));
                 }
             }
         }
@@ -376,17 +439,43 @@ public sealed class MouseSelectionHoverMonitor : ISelectionHoverMonitor
         if (nCode >= 0)
         {
             var msg = (uint)wParam.Value;
-            if (msg is WmKeyDown or WmSysKeyDown)
+            var info = (KBDLLHOOKSTRUCT*)lParam.Value;
+            if (info is not null && ((uint)info->flags & LlkhfInjected) == 0)
             {
-                var info = (KBDLLHOOKSTRUCT*)lParam.Value;
-                if (info is not null && ((uint)info->flags & LlkhfInjected) == 0)
+                var vk = info->vkCode;
+                if (msg is WmKeyUp or WmSysKeyUp)
                 {
-                    _eventChannel?.Writer.TryWrite(new HookEvent(
-                        HookEventKind.KeyDown,
-                        0,
-                        0,
-                        info->vkCode,
-                        Environment.TickCount64));
+                    if (vk == VkC)
+                    {
+                        _isVkCDown = false;
+                    }
+                }
+                else if (msg is WmKeyDown or WmSysKeyDown)
+                {
+                    var isRepeat = false;
+                    if (vk == VkC)
+                    {
+                        if (_isVkCDown)
+                        {
+                            isRepeat = true;
+                        }
+                        else
+                        {
+                            _isVkCDown = true;
+                        }
+                    }
+
+                    if (!isRepeat)
+                    {
+                        var ctrlOnly = vk == VkC && IsControlOnlyPressed();
+                        _eventChannel?.Writer.TryWrite(new HookEvent(
+                            HookEventKind.KeyDown,
+                            0,
+                            0,
+                            vk,
+                            Environment.TickCount64,
+                            ctrlOnly));
+                    }
                 }
             }
         }
@@ -403,6 +492,7 @@ public sealed class MouseSelectionHoverMonitor : ISelectionHoverMonitor
 
         ScreenPoint lastClickPoint = default;
         long lastClickTimestampMs = 0;
+        long lastCtrlCTimestampMs = 0;
 
         CancellationTokenSource? pendingValidationCts = null;
 
@@ -414,6 +504,7 @@ public sealed class MouseSelectionHoverMonitor : ISelectionHoverMonitor
                 {
                     case HookEventKind.LeftButtonDown:
                     {
+                        lastCtrlCTimestampMs = 0;
                         var point = new ScreenPoint(evt.X, evt.Y);
                         var rootHwnd = GetRootWindowAtPoint(point);
                         if (IsWindowIgnored(rootHwnd))
@@ -449,27 +540,44 @@ public sealed class MouseSelectionHoverMonitor : ISelectionHoverMonitor
                         }
 
                         var currentConfig = _config;
+                        var dpiScale = Math.Max(1.0, _windowHelper.GetMonitorAtPoint(upPoint).DpiScale);
+                        var scaledMinDragPx = Math.Max(4, (int)Math.Round(currentConfig.MinDragDistancePixels * dpiScale));
+                        var scaledDoubleClickRadiusPx = Math.Max(DoubleClickRadiusPx, (int)Math.Round(DoubleClickRadiusPx * dpiScale));
+
                         var isDrag = hasActiveDown && IsDragSelectionGesture(
                             downPoint,
                             downTimestampMs,
                             upPoint,
                             evt.TimestampMs,
-                            currentConfig.MinDragDistancePixels);
+                            scaledMinDragPx);
 
                         hasActiveDown = false;
 
                         var doubleClickTime = (int)PInvoke.GetDoubleClickTime();
-                        var isDoubleClick = !isDrag && IsDoubleClickSelectionGesture(
+                        var isMultiClick = !isDrag && IsDoubleClickSelectionGesture(
                             lastClickPoint,
                             lastClickTimestampMs,
                             upPoint,
                             evt.TimestampMs,
-                            doubleClickTime);
+                            doubleClickTime,
+                            scaledDoubleClickRadiusPx);
 
-                        if (isDrag || isDoubleClick)
+                        if (isDrag || isMultiClick)
                         {
-                            lastClickTimestampMs = 0;
-                            if (currentConfig.EnableHoverIcon)
+                            if (isDrag)
+                            {
+                                lastClickTimestampMs = 0;
+                            }
+                            else
+                            {
+                                // Preserve multi-click timestamp chain so triple-click paragraph selection
+                                // re-validates instead of triggering RaiseDismissRequested().
+                                lastClickPoint = upPoint;
+                                lastClickTimestampMs = evt.TimestampMs;
+                            }
+
+                            var ctrlSatisfied = !currentConfig.RequireCtrlForHover || evt.CtrlModifierActive || IsControlPressed();
+                            if (currentConfig.EnableHoverIcon && ctrlSatisfied)
                             {
                                 CancelPendingValidation(ref pendingValidationCts);
                                 pendingValidationCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -493,6 +601,7 @@ public sealed class MouseSelectionHoverMonitor : ISelectionHoverMonitor
                     case HookEventKind.MiddleButtonDown:
                     case HookEventKind.MouseWheel:
                     {
+                        lastCtrlCTimestampMs = 0;
                         var point = new ScreenPoint(evt.X, evt.Y);
                         var rootHwnd = GetRootWindowAtPoint(point);
                         if (!IsWindowIgnored(rootHwnd))
@@ -510,6 +619,36 @@ public sealed class MouseSelectionHoverMonitor : ISelectionHoverMonitor
                         {
                             break;
                         }
+
+                        if (evt.VirtualKey == VkC && evt.CtrlModifierActive)
+                        {
+                            var fgForCopy = _windowHelper.GetForegroundWindowHandle();
+                            if (_doubleTapCopyEnabled &&
+                                IsDoubleTapCopyInterval(lastCtrlCTimestampMs, evt.TimestampMs))
+                            {
+                                lastCtrlCTimestampMs = 0;
+                                CancelPendingValidation(ref pendingValidationCts);
+                                RaiseDismissRequested();
+
+                                if (fgForCopy != nint.Zero && !IsWindowIgnored(fgForCopy))
+                                {
+                                    RaiseDoubleTapCopyDetected(fgForCopy);
+                                }
+
+                                break;
+                            }
+
+                            lastCtrlCTimestampMs = evt.TimestampMs;
+                            if (!IsWindowIgnored(fgForCopy))
+                            {
+                                CancelPendingValidation(ref pendingValidationCts);
+                                RaiseDismissRequested();
+                            }
+
+                            break;
+                        }
+
+                        lastCtrlCTimestampMs = 0;
 
                         if (evt.VirtualKey == (uint)VIRTUAL_KEY.VK_ESCAPE)
                         {
@@ -584,10 +723,12 @@ public sealed class MouseSelectionHoverMonitor : ISelectionHoverMonitor
             }
 
             // Fallback heuristic for browsers/PDF canvases that do not expose UIA TextPattern:
-            // still NEVER sends Ctrl+C until the user explicitly clicks the floating hover icon!
+            // Require current cursor to match standard IDC_IBEAM so dragging scrollbars, sliders,
+            // splitters, tabs, or non-text canvases never triggers a false hover icon!
             var foregroundClass = GetWindowClassName(foregroundHwnd);
             var hoveredClass = GetWindowClassName(GetWindowAtPoint(anchorPoint));
-            if (IsKnownSelectableCanvasClass(foregroundClass) || IsKnownSelectableCanvasClass(hoveredClass))
+            if ((IsKnownSelectableCanvasClass(foregroundClass) || IsKnownSelectableCanvasClass(hoveredClass)) &&
+                IsCurrentCursorIBeam())
             {
                 RaiseSelectionDetected(new HoverSelectionEventArgs(
                     previewText: null,
@@ -631,6 +772,27 @@ public sealed class MouseSelectionHoverMonitor : ISelectionHoverMonitor
         }
     }
 
+    private void RaiseDoubleTapCopyDetected(nint foregroundHwnd)
+    {
+        var handler = DoubleTapCopyDetected;
+        if (handler is null)
+        {
+            return;
+        }
+
+        ThreadPool.QueueUserWorkItem(_ =>
+        {
+            try
+            {
+                handler.Invoke(this, foregroundHwnd);
+            }
+            catch
+            {
+                // Keep monitor resilient against subscriber exceptions.
+            }
+        });
+    }
+
     private static void CancelPendingValidation(ref CancellationTokenSource? cts)
     {
         if (cts is null)
@@ -648,6 +810,46 @@ public sealed class MouseSelectionHoverMonitor : ISelectionHoverMonitor
             cts = null;
         }
     }
+
+    private static unsafe bool IsCurrentCursorIBeam()
+    {
+        var cursorInfo = new CURSORINFO
+        {
+            cbSize = (uint)sizeof(CURSORINFO),
+        };
+
+        if (!PInvoke.GetCursorInfo(ref cursorInfo))
+        {
+            return false;
+        }
+
+        if (((uint)cursorInfo.flags & CursorShowingFlag) == 0 || cursorInfo.hCursor == HCURSOR.Null)
+        {
+            return false;
+        }
+
+        var ibeamCursor = PInvoke.LoadCursor(HINSTANCE.Null, new PCWSTR((char*)32513)); // IDC_IBEAM
+        return ibeamCursor != HCURSOR.Null && cursorInfo.hCursor == ibeamCursor;
+    }
+
+    private static bool IsControlPressed() =>
+        IsKeyDown(VIRTUAL_KEY.VK_CONTROL) ||
+        IsKeyDown(VIRTUAL_KEY.VK_LCONTROL) ||
+        IsKeyDown(VIRTUAL_KEY.VK_RCONTROL);
+
+    private static bool IsControlOnlyPressed() =>
+        IsControlPressed() &&
+        !IsKeyDown(VIRTUAL_KEY.VK_MENU) &&
+        !IsKeyDown(VIRTUAL_KEY.VK_LMENU) &&
+        !IsKeyDown(VIRTUAL_KEY.VK_RMENU) &&
+        !IsKeyDown(VIRTUAL_KEY.VK_SHIFT) &&
+        !IsKeyDown(VIRTUAL_KEY.VK_LSHIFT) &&
+        !IsKeyDown(VIRTUAL_KEY.VK_RSHIFT) &&
+        !IsKeyDown(VIRTUAL_KEY.VK_LWIN) &&
+        !IsKeyDown(VIRTUAL_KEY.VK_RWIN);
+
+    private static bool IsKeyDown(VIRTUAL_KEY vk) =>
+        (PInvoke.GetAsyncKeyState((int)vk) & 0x8000) != 0;
 
     private static bool IsModifierVirtualKey(uint vk) =>
         (VIRTUAL_KEY)vk is
@@ -714,5 +916,6 @@ public sealed class MouseSelectionHoverMonitor : ISelectionHoverMonitor
         int X,
         int Y,
         uint VirtualKey,
-        long TimestampMs);
+        long TimestampMs,
+        bool CtrlModifierActive = false);
 }

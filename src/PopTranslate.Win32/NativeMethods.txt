@@ -105,7 +105,9 @@ CreateDIBSection
 
 // UI Automation COM (Zero-Invasive Selection Reading)
 IUIAutomation
+IUIAutomation2
 IUIAutomationElement
+IUIAutomationTreeWalker
 IUIAutomationTextPattern
 IUIAutomationTextPattern2
 IUIAutomationTextRange
@@ -114,6 +116,7 @@ IUIAutomationValuePattern
 CUIAutomation
 CUIAutomation8
 UIA_PATTERN_ID
+UIA_CONTROLTYPE_ID
 CoInitializeEx
 CoUninitialize
 
@@ -121,11 +124,15 @@ CoUninitialize
 GetDesktopWindow
 GetShellWindow
 IsWindow
+IsChild
+EnumChildWindows
 BringWindowToTop
 SetThreadDpiAwarenessContext
 GetTextExtentPoint32W
 RoundRect
 GetStockObject
+GetCursorInfo
+CURSORINFO
 MONITORINFOEXW
 SysFreeString
 MSLLHOOKSTRUCT

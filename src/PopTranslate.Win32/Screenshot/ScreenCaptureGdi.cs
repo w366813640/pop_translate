@@ -405,7 +405,8 @@ public static class ScreenCaptureGdi
     public static async Task<CapturedScreenshot> CropAndEncodeAsync(
         CapturedMonitorBitmap monitorBitmap,
         ScreenRect localSelectionRect,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool copyOnly = false)
     {
         ArgumentNullException.ThrowIfNull(monitorBitmap);
 
@@ -446,7 +447,9 @@ public static class ScreenCaptureGdi
             CaptureBounds: globalBounds,
             DpiScale: monitorBitmap.Monitor.DpiScale,
             PixelWidth: clamped.Width,
-            PixelHeight: clamped.Height);
+            PixelHeight: clamped.Height,
+            RawBgraBytes: croppedBgra,
+            CopyOnly: copyOnly);
     }
 
     private static unsafe BITMAPINFO CreateTopDownBgra32BitmapInfo(int width, int height)

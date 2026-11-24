@@ -24,11 +24,26 @@
         <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8">
             <Button
                 Style="{StaticResource AccentButtonStyle}"
-                Command="{x:Bind ViewModel.AddOpenAiProviderCommand}">
+                AutomationProperties.Name="添加大模型服务预设">
                 <StackPanel Orientation="Horizontal" Spacing="6">
                     <FontIcon FontSize="12" Glyph="&#xE710;" />
-                    <TextBlock Text="添加 OpenAI 兼容实例" />
+                    <TextBlock Text="添加大模型服务" />
+                    <FontIcon FontSize="10" Glyph="&#xE70D;" Opacity="0.85" VerticalAlignment="Center" />
                 </StackPanel>
+                <Button.Flyout>
+                    <MenuFlyout Placement="BottomEdgeAlignedLeft">
+                        <MenuFlyoutItem Text="OpenAI (gpt-4o-mini)" Tag="openai" Click="AddLlmPreset_Click" />
+                        <MenuFlyoutItem Text="DeepSeek (deepseek-chat)" Tag="deepseek" Click="AddLlmPreset_Click" />
+                        <MenuFlyoutItem Text="Google Gemini (gemini-2.5-flash)" Tag="gemini" Click="AddLlmPreset_Click" />
+                        <MenuFlyoutItem Text="SiliconFlow (硅基流动)" Tag="siliconflow" Click="AddLlmPreset_Click" />
+                        <MenuFlyoutItem Text="Ollama (本地免密钥)" Tag="ollama" Click="AddLlmPreset_Click" />
+                        <MenuFlyoutItem Text="OpenRouter" Tag="openrouter" Click="AddLlmPreset_Click" />
+                        <MenuFlyoutItem Text="通义千问 (DashScope)" Tag="dashscope" Click="AddLlmPreset_Click" />
+                        <MenuFlyoutItem Text="智谱 GLM (glm-4-flash)" Tag="zhipu" Click="AddLlmPreset_Click" />
+                        <MenuFlyoutSeparator />
+                        <MenuFlyoutItem Text="自定义 OpenAI 兼容实例" Tag="custom" Click="AddLlmPreset_Click" />
+                    </MenuFlyout>
+                </Button.Flyout>
             </Button>
 
             <Button Command="{x:Bind ViewModel.AddDeepLProviderCommand}">
@@ -113,22 +128,43 @@
                     <!-- Reorder / Delete Bar -->
                     <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right">
                         <Button
+                            AutomationProperties.Name="上移卡片顺序"
                             ToolTipService.ToolTip="上移卡片顺序"
                             IsEnabled="{x:Bind ViewModel.HasSelectedProvider, Mode=OneWay}"
                             Command="{x:Bind ViewModel.MoveSelectedUpCommand}">
                             <FontIcon FontSize="12" Glyph="&#xE74A;" />
                         </Button>
                         <Button
+                            AutomationProperties.Name="下移卡片顺序"
                             ToolTipService.ToolTip="下移卡片顺序"
                             IsEnabled="{x:Bind ViewModel.HasSelectedProvider, Mode=OneWay}"
                             Command="{x:Bind ViewModel.MoveSelectedDownCommand}">
                             <FontIcon FontSize="12" Glyph="&#xE74B;" />
                         </Button>
                         <Button
+                            AutomationProperties.Name="删除所选实例"
                             ToolTipService.ToolTip="删除所选实例"
-                            IsEnabled="{x:Bind ViewModel.HasSelectedProvider, Mode=OneWay}"
-                            Command="{x:Bind ViewModel.DeleteSelectedProviderCommand}">
+                            IsEnabled="{x:Bind ViewModel.HasSelectedProvider, Mode=OneWay}">
                             <FontIcon FontSize="12" Glyph="&#xE74D;" />
+                            <Button.Flyout>
+                                <Flyout x:Name="DeleteConfirmFlyout" Placement="Top">
+                                    <StackPanel Spacing="10" MaxWidth="240">
+                                        <TextBlock
+                                            Text="确定要删除所选翻译服务实例吗？其已保存的 API Key 与自定义配置将一并移除。"
+                                            TextWrapping="Wrap"
+                                            FontSize="12" />
+                                        <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+                                            <Button
+                                                Content="取消"
+                                                Click="CancelDeleteProvider_Click" />
+                                            <Button
+                                                Style="{StaticResource AccentButtonStyle}"
+                                                Content="确认删除"
+                                                Click="ConfirmDeleteProvider_Click" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Flyout>
+                            </Button.Flyout>
                         </Button>
                     </StackPanel>
                 </Grid>
@@ -181,18 +217,30 @@
                                     PlaceholderText="https://api.openai.com/v1"
                                     Text="{x:Bind ViewModel.SelectedProvider.BaseUrl, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
 
-                                <Grid ColumnSpacing="12">
+                                <Grid ColumnSpacing="10">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="130" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="124" />
                                     </Grid.ColumnDefinitions>
                                     <TextBox
                                         Grid.Column="0"
                                         Header="模型名称 (Model)"
                                         PlaceholderText="gpt-4o-mini / deepseek-chat / qwen2.5"
                                         Text="{x:Bind ViewModel.SelectedProvider.Model, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                                    <NumberBox
+                                    <Button
                                         Grid.Column="1"
+                                        VerticalAlignment="Bottom"
+                                        ToolTipService.ToolTip="从当前 API Base URL 拉取可用模型列表"
+                                        IsEnabled="{x:Bind ViewModel.CanFetchModels, Mode=OneWay}"
+                                        Command="{x:Bind ViewModel.FetchModelsCommand}">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <FontIcon FontSize="12" Glyph="&#xE72C;" />
+                                            <TextBlock Text="拉取模型" />
+                                        </StackPanel>
+                                    </Button>
+                                    <NumberBox
+                                        Grid.Column="2"
                                         Header="Temperature"
                                         Minimum="0"
                                         Maximum="2"
@@ -200,6 +248,14 @@
                                         SpinButtonPlacementMode="Compact"
                                         Value="{x:Bind ViewModel.SelectedProvider.Temperature, Mode=TwoWay}" />
                                 </Grid>
+
+                                <ComboBox
+                                    Header="已拉取的可用模型（点击快速填入）"
+                                    HorizontalAlignment="Stretch"
+                                    PlaceholderText="从已拉取模型列表中选择..."
+                                    Visibility="{x:Bind ViewModel.HasDiscoveredModels, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                                    ItemsSource="{x:Bind ViewModel.DiscoveredModels, Mode=OneWay}"
+                                    SelectedItem="{x:Bind ViewModel.SelectedDiscoveredModel, Mode=TwoWay}" />
 
                                 <PasswordBox
                                     Header="API Key（Windows DPAPI 本地加密保存）"
@@ -267,8 +323,12 @@
                                     <ComboBoxItem Content="仅使用 Google 免费翻译" />
                                     <ComboBoxItem Content="仅使用 Bing 免费翻译" />
                                 </ComboBox>
+                                <TextBox
+                                    Header="自定义 Google 镜像地址（可选，留空自动使用官方多节点）"
+                                    PlaceholderText="https://clients5.google.com"
+                                    Text="{x:Bind ViewModel.SelectedProvider.BaseUrl, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                                 <TextBlock
-                                    Text="开箱即用，无需配置 API Key。若所处网络环境无法直连，可在「网络与权限」中配置系统/HTTP/SOCKS5 代理。"
+                                    Text="开箱即用，无需配置 API Key。Google 引擎内置多节点自动故障转移，若所处网络环境无法直连，可配置自定义镜像或在「网络与权限」中配置系统/HTTP/SOCKS5 代理。"
                                     Style="{StaticResource CaptionTextBlockStyle}"
                                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                     TextWrapping="Wrap" />

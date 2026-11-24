@@ -5,15 +5,84 @@ using PopTranslate.Core.Models;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
+using Windows.ApplicationModel.DataTransfer;
 
 namespace PopTranslate.App.Services;
 
 /// <summary>
-/// Central UI-thread orchestrator connecting global hotkeys, zero-invasive hover icon,
-/// screenshot OCR, parallel translation popup, Mica settings window, and tray residency.
+/// Prevents PopTranslate's own clipboard writes (auto-copy, manual copy, silent OCR, selection fallback,
+/// and write-back paste) from re-triggering the temporary clipboard translation listener.
+/// </summary>
+internal static class ClipboardLoopGuard
+{
+    private static readonly Lock SyncRoot = new();
+    private static string? _lastInternalCopiedText;
+    private static DateTimeOffset _lastInternalCopyUtc = DateTimeOffset.MinValue;
+    private static DateTimeOffset _suppressUntilUtc = DateTimeOffset.MinValue;
+
+    public static void SuppressFor(TimeSpan duration)
+    {
+        lock (SyncRoot)
+        {
+            var candidate = DateTimeOffset.UtcNow.Add(duration);
+            if (candidate > _suppressUntilUtc)
+            {
+                _suppressUntilUtc = candidate;
+            }
+        }
+    }
+
+    public static bool TryCopyText(string? text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return false;
+        }
+
+        lock (SyncRoot)
+        {
+            _lastInternalCopiedText = text;
+            _lastInternalCopyUtc = DateTimeOffset.UtcNow;
+            var candidate = _lastInternalCopyUtc.AddMilliseconds(900);
+            if (candidate > _suppressUntilUtc)
+            {
+                _suppressUntilUtc = candidate;
+            }
+        }
+
+        return AppAssetHelper.TryCopyTextToClipboard(text);
+    }
+
+    public static bool ShouldIgnoreClipboardEvent(string? candidateText = null)
+    {
+        lock (SyncRoot)
+        {
+            var now = DateTimeOffset.UtcNow;
+            if (now < _suppressUntilUtc)
+            {
+                return true;
+            }
+
+            if (candidateText is not null &&
+                string.Equals(candidateText, _lastInternalCopiedText, StringComparison.Ordinal) &&
+                (now - _lastInternalCopyUtc).TotalSeconds < 3.0)
+            {
+                return true;
+            }
+
+            return false;
+        }
+    }
+}
+
+/// <summary>
+/// Central UI-thread orchestrator connecting global hotkeys, dual-action hover pill,
+/// screenshot/silent OCR, parallel translation &amp; polish popup, Mica settings window, and tray residency.
 /// </summary>
 public sealed class AppCoordinator : IDisposable
 {
+    private const int MaxClipboardAutoTranslateLength = 8000;
+
     private readonly IServiceProvider _serviceProvider;
     private readonly ISettingsStore _settingsStore;
     private readonly IGlobalHotkeyService _globalHotkeyService;
@@ -23,6 +92,7 @@ public sealed class AppCoordinator : IDisposable
     private readonly IOcrOrchestrator _ocrOrchestrator;
     private readonly IProxyHttpClientFactory _proxyHttpClientFactory;
     private readonly IWindowHelperService _windowHelperService;
+    private readonly IForegroundAppGuard _foregroundAppGuard;
     private readonly IStartupPrivilegeService _startupPrivilegeService;
     private readonly SingleInstanceGuard _singleInstanceGuard;
     private readonly TrayIconHost _trayIconHost;
@@ -30,6 +100,7 @@ public sealed class AppCoordinator : IDisposable
     private readonly SettingsViewModel _settingsViewModel;
 
     private DispatcherQueue? _uiDispatcher;
+    private DispatcherQueueTimer? _hoverMuteExpiryTimer;
     private FloatingHoverIconWindow? _hoverIconWindow;
     private TranslationPopupWindow? _popupWindow;
     private SettingsWindow? _settingsWindow;
@@ -39,6 +110,12 @@ public sealed class AppCoordinator : IDisposable
     private ProxyConfig? _lastAppliedProxy;
     private IReadOnlyDictionary<HotkeyAction, HotkeyRegistrationResult> _lastHotkeyResults =
         new Dictionary<HotkeyAction, HotkeyRegistrationResult>();
+
+    private nint _lastSourceWindowHandle;
+    private DateTimeOffset? _hoverMutedUntilUtc;
+    private DateTimeOffset _lastDoubleTapHandledUtc = DateTimeOffset.MinValue;
+    private bool _isClipboardListenerEnabled;
+    private string? _lastClipboardListenerText;
 
     private bool _initialized;
     private bool _isExiting;
@@ -54,6 +131,7 @@ public sealed class AppCoordinator : IDisposable
         IOcrOrchestrator ocrOrchestrator,
         IProxyHttpClientFactory proxyHttpClientFactory,
         IWindowHelperService windowHelperService,
+        IForegroundAppGuard foregroundAppGuard,
         IStartupPrivilegeService startupPrivilegeService,
         SingleInstanceGuard singleInstanceGuard,
         TrayIconHost trayIconHost,
@@ -69,6 +147,7 @@ public sealed class AppCoordinator : IDisposable
         _ocrOrchestrator = ocrOrchestrator;
         _proxyHttpClientFactory = proxyHttpClientFactory;
         _windowHelperService = windowHelperService;
+        _foregroundAppGuard = foregroundAppGuard;
         _startupPrivilegeService = startupPrivilegeService;
         _singleInstanceGuard = singleInstanceGuard;
         _trayIconHost = trayIconHost;
@@ -76,7 +155,12 @@ public sealed class AppCoordinator : IDisposable
         _settingsViewModel = settingsViewModel;
     }
 
-    public async Task InitializeAsync(DispatcherQueue uiDispatcher)
+    public nint LastSourceWindowHandle => _lastSourceWindowHandle;
+
+    private bool IsHoverMuted =>
+        _hoverMutedUntilUtc is { } until && DateTimeOffset.UtcNow < until;
+
+    public async Task InitializeAsync(DispatcherQueue uiDispatcher, string[]? args = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (_initialized)
@@ -87,20 +171,25 @@ public sealed class AppCoordinator : IDisposable
         _uiDispatcher = uiDispatcher;
         _initialized = true;
 
+        var isFirstEverLaunch = !File.Exists(_settingsStore.SettingsFilePath);
         var settings = await _settingsStore.LoadAsync();
         var isAdmin = SafeIsAdmin();
 
-        // Pre-warm hover icon and Desktop Acrylic translation popup hidden for instant (<30ms) display.
+        // Pre-warm hover pill and Desktop Acrylic translation popup hidden for instant (<30ms) display.
         _hoverIconWindow = _serviceProvider.GetRequiredService<FloatingHoverIconWindow>();
         _hoverIconWindow.ApplyTheme(settings.Window.Theme);
         _hoverIconWindow.PreWarm();
-        _hoverIconWindow.IconClicked += OnHoverIconClicked;
+        _hoverIconWindow.TranslateClicked += OnHoverTranslateClicked;
+        _hoverIconWindow.PolishClicked += OnHoverPolishClicked;
+        _hoverIconWindow.BlacklistProcessRequested += (_, processName) => EnqueueUi(() => _ = AddProcessToBlacklistAsync(processName));
+        _hoverIconWindow.MuteHoverRequested += (_, duration) => EnqueueUi(() => SetHoverMute(duration));
+        _hoverIconWindow.DisableHoverIconRequested += (_, _) => EnqueueUi(() => _ = ToggleHoverIconAsync(enabled: false));
         _selectionHoverMonitor.RegisterIgnoredWindow(_hoverIconWindow.WindowHandle);
 
         _popupWindow = _serviceProvider.GetRequiredService<TranslationPopupWindow>();
         _popupWindow.PreWarm(settings);
         _popupWindow.SettingsRequested += (_, pageTag) => _ = OpenSettingsAsync(pageTag);
-        _popupWindow.ScreenshotRequested += (_, _) => _ = TriggerScreenshotTranslationAsync();
+        _popupWindow.ScreenshotRequested += (_, _) => _ = TriggerScreenshotTranslationAsync(forceSilentCopyOnly: false);
         _popupWindow.FixedPositionMoved += OnPopupFixedPositionMoved;
         _popupWindow.PopupWidthChanged += OnPopupWidthChanged;
         _selectionHoverMonitor.RegisterIgnoredWindow(_popupWindow.WindowHandle);
@@ -109,29 +198,35 @@ public sealed class AppCoordinator : IDisposable
         _settingsViewModel.RestartAsAdministratorRequested += (_, _) => RestartAsAdministrator();
 
         // Wire persistent Windows 11 system tray icon.
-        _trayIconHost.InputTranslateRequested += (_, _) => EnqueueUi(OpenInputTranslation);
-        _trayIconHost.PolishInputRequested += (_, _) => EnqueueUi(OpenInputPolish);
-        _trayIconHost.ScreenshotTranslateRequested += (_, _) => EnqueueUi(() => _ = TriggerScreenshotTranslationAsync());
+        _trayIconHost.InputTranslateRequested += (_, _) => EnqueueUi(() => OpenInputTranslation());
+        _trayIconHost.PolishInputRequested += (_, _) => EnqueueUi(() => OpenInputPolish());
+        _trayIconHost.ScreenshotTranslateRequested += (_, _) => EnqueueUi(() => _ = TriggerScreenshotTranslationAsync(forceSilentCopyOnly: false));
+        _trayIconHost.SilentOcrRequested += (_, _) => EnqueueUi(() => _ = TriggerScreenshotTranslationAsync(forceSilentCopyOnly: true));
         _trayIconHost.HoverIconToggled += (_, enabled) => EnqueueUi(() => _ = ToggleHoverIconAsync(enabled));
+        _trayIconHost.HoverMuteToggled += (_, muted) => EnqueueUi(() => SetHoverMute(muted ? TimeSpan.FromMinutes(30) : null));
+        _trayIconHost.ClipboardListenerToggled += (_, enabled) => EnqueueUi(() => SetClipboardListenerEnabled(enabled));
         _trayIconHost.SettingsRequested += (_, _) => EnqueueUi(() => _ = OpenSettingsAsync());
         _trayIconHost.RestartAsAdministratorRequested += (_, _) => EnqueueUi(RestartAsAdministrator);
         _trayIconHost.ExitRequested += (_, _) => EnqueueUi(RequestExit);
-        _trayIconHost.Initialize(settings, isAdmin, _uiDispatcher);
+        _trayIconHost.Initialize(settings, isAdmin, _uiDispatcher, IsHoverMuted, _isClipboardListenerEnabled);
 
         // Wire OS services.
         _globalHotkeyService.HotkeyPressed += OnGlobalHotkeyPressed;
         _selectionHoverMonitor.SelectionDetected += OnSelectionHoverDetected;
         _selectionHoverMonitor.DismissRequested += OnSelectionHoverDismissRequested;
+        _selectionHoverMonitor.DoubleTapCopyDetected += OnDoubleTapCopyDetected;
         _settingsStore.SettingsChanged += OnSettingsChanged;
-        _singleInstanceGuard.SecondInstanceSignaled += (_, _) => EnqueueUi(OpenInputTranslation);
+        _singleInstanceGuard.SecondInstanceArgumentsReceived += OnSecondInstanceArgumentsReceived;
 
-        // Apply initial hotkeys, proxy baseline, and hover monitor.
+        // Apply initial hotkeys, proxy baseline, and hover/double-tap monitor.
         _lastAppliedProxy = settings.Proxy.Clone();
         ApplyHotkeys(settings.Hotkeys, force: true);
-        ApplyHoverMonitorConfig(settings.Selection);
+        ApplyHoverAndDoubleTapConfig(settings.Selection, settings.Hotkeys);
+
+        await HandleStartupArgumentsAsync(args ?? [], isFirstEverLaunch, settings);
     }
 
-    public void OpenInputTranslation()
+    public void OpenInputTranslation(string? initialText = null, nint? sourceWindowHandle = null)
     {
         if (_disposed || _popupWindow is null)
         {
@@ -139,12 +234,25 @@ public sealed class AppCoordinator : IDisposable
         }
 
         _hoverIconWindow?.HideIcon();
+        var resolvedSource = SanitizeSourceWindowHandle(
+            sourceWindowHandle ?? _windowHelperService.GetForegroundWindowHandle());
+        _lastSourceWindowHandle = resolvedSource;
+        _popupViewModel.SetSourceWindowHandle(resolvedSource);
         _popupViewModel.PrepareForInput();
+
         var cursor = _windowHelperService.GetCursorPosition();
-        _popupWindow.ShowPopup(cursor, focusSourceInput: true);
+        if (!string.IsNullOrWhiteSpace(initialText))
+        {
+            _popupWindow.ShowPopup(cursor, focusSourceInput: false);
+            _ = _popupViewModel.TranslateTextAsync(initialText, isFromOcr: false, resetLanguageSelection: true);
+        }
+        else
+        {
+            _popupWindow.ShowPopup(cursor, focusSourceInput: true);
+        }
     }
 
-    public void OpenInputPolish()
+    public void OpenInputPolish(string? initialText = null, nint? sourceWindowHandle = null)
     {
         if (_disposed || _popupWindow is null)
         {
@@ -152,9 +260,22 @@ public sealed class AppCoordinator : IDisposable
         }
 
         _hoverIconWindow?.HideIcon();
+        var resolvedSource = SanitizeSourceWindowHandle(
+            sourceWindowHandle ?? _windowHelperService.GetForegroundWindowHandle());
+        _lastSourceWindowHandle = resolvedSource;
+        _popupViewModel.SetSourceWindowHandle(resolvedSource);
         _popupViewModel.PrepareForPolishInput();
+
         var cursor = _windowHelperService.GetCursorPosition();
-        _popupWindow.ShowPopup(cursor, focusSourceInput: true);
+        if (!string.IsNullOrWhiteSpace(initialText))
+        {
+            _popupWindow.ShowPopup(cursor, focusSourceInput: false);
+            _ = _popupViewModel.PolishTextAsync(initialText, resetStyleToDefault: true);
+        }
+        else
+        {
+            _popupWindow.ShowPopup(cursor, focusSourceInput: true);
+        }
     }
 
     public async Task OpenSettingsAsync(string? initialPageTag = null)
@@ -175,7 +296,7 @@ public sealed class AppCoordinator : IDisposable
         await _settingsWindow.ShowAndRefreshAsync(initialPageTag);
     }
 
-    public async Task TriggerScreenshotTranslationAsync()
+    public async Task TriggerScreenshotTranslationAsync(bool forceSilentCopyOnly = false)
     {
         if (_disposed || _popupWindow is null || _screenshotCaptureService.IsCaptureActive)
         {
@@ -199,8 +320,17 @@ public sealed class AppCoordinator : IDisposable
         }
         catch (Exception ex)
         {
-            _popupWindow.ShowPopup(_windowHelperService.GetCursorPosition(), focusSourceInput: false);
-            _popupViewModel.ShowStatusError($"启动截图选区失败：{ex.Message}");
+            if (!forceSilentCopyOnly)
+            {
+                _popupViewModel.SetSourceWindowHandle(0);
+                _popupWindow.ShowPopup(_windowHelperService.GetCursorPosition(), focusSourceInput: false);
+                _popupViewModel.ShowStatusError($"启动截图选区失败：{ex.Message}");
+            }
+            else
+            {
+                AppDiagnosticsLogger.Warn("SilentOcr", "Screenshot region capture failed.", ex);
+            }
+
             return;
         }
 
@@ -209,8 +339,18 @@ public sealed class AppCoordinator : IDisposable
             return;
         }
 
+        var isSilentCopyOnly = forceSilentCopyOnly || screenshot.CopyOnly;
+        if (isSilentCopyOnly)
+        {
+            await ExecuteSilentOcrAsync(screenshot);
+            return;
+        }
+
+        _lastSourceWindowHandle = 0;
+        _popupViewModel.SetSourceWindowHandle(0);
+
         var anchor = new ScreenPoint(screenshot.CaptureBounds.Right, screenshot.CaptureBounds.Bottom);
-        _popupViewModel.BeginOcrCapture();
+        _popupViewModel.BeginOcrCapture(screenshot);
         _popupWindow.ShowPopup(anchor, focusSourceInput: false);
 
         try
@@ -235,6 +375,35 @@ public sealed class AppCoordinator : IDisposable
         catch (Exception ex)
         {
             _popupViewModel.ShowStatusError($"OCR 识别异常：{ex.Message}");
+        }
+    }
+
+    private async Task ExecuteSilentOcrAsync(CapturedScreenshot screenshot)
+    {
+        try
+        {
+            var ocrResult = await _ocrOrchestrator.RecognizeAsync(screenshot.ToOcrImage());
+            if (ocrResult.IsSuccess && !string.IsNullOrWhiteSpace(ocrResult.Text))
+            {
+                ClipboardLoopGuard.TryCopyText(ocrResult.Text.Trim());
+                AppDiagnosticsLogger.Info("SilentOcr", "Silent OCR completed and copied to clipboard.");
+            }
+            else
+            {
+                AppDiagnosticsLogger.Warn(
+                    "SilentOcr",
+                    string.IsNullOrWhiteSpace(ocrResult.ErrorMessage)
+                        ? "Silent OCR detected no text in selected region."
+                        : $"Silent OCR failed: {ocrResult.ErrorMessage}");
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Cancelled cleanly.
+        }
+        catch (Exception ex)
+        {
+            AppDiagnosticsLogger.Warn("SilentOcr", "Silent OCR threw an exception.", ex);
         }
     }
 
@@ -277,6 +446,182 @@ public sealed class AppCoordinator : IDisposable
         Application.Current.Exit();
     }
 
+    private async Task HandleStartupArgumentsAsync(string[] args, bool isFirstEverLaunch, AppSettings settings)
+    {
+        var isMinimized = HasFlag(args, "--minimized", "-minimized", "/minimized");
+        var isElevated = HasFlag(args, "--elevated", "-elevated");
+
+        if (isElevated)
+        {
+            await OpenSettingsAsync("Network");
+            return;
+        }
+
+        if (await TryDispatchCliVerbAsync(args))
+        {
+            return;
+        }
+
+        if (isMinimized)
+        {
+            // Silent tray boot — never open InputTranslate on logon startup!
+            return;
+        }
+
+        if (isFirstEverLaunch)
+        {
+            try
+            {
+                await _settingsStore.SaveAsync(settings);
+            }
+            catch (Exception ex)
+            {
+                AppDiagnosticsLogger.Warn("Startup", "Initial settings file persistence skipped.", ex);
+            }
+
+            await OpenSettingsAsync("General");
+        }
+    }
+
+    private void OnSecondInstanceArgumentsReceived(object? sender, string[] args)
+    {
+        EnqueueUi(() => _ = HandleSecondInstanceArgumentsAsync(args));
+    }
+
+    private async Task HandleSecondInstanceArgumentsAsync(string[] args)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        if (HasFlag(args, "--minimized", "-minimized", "/minimized"))
+        {
+            // Secondary logon / background auto-start race: remain quietly in tray.
+            return;
+        }
+
+        if (HasFlag(args, "--elevated", "-elevated"))
+        {
+            await OpenSettingsAsync("Network");
+            return;
+        }
+
+        if (await TryDispatchCliVerbAsync(args))
+        {
+            return;
+        }
+
+        // Default secondary interactive launch with no CLI arguments: open Input Translation popup.
+        OpenInputTranslation();
+    }
+
+    private async Task<bool> TryDispatchCliVerbAsync(string[] args)
+    {
+        if (args.Length == 0)
+        {
+            return false;
+        }
+
+        string? verb = null;
+        var payloadParts = new List<string>();
+
+        foreach (var raw in args)
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                continue;
+            }
+
+            var trimmed = raw.Trim();
+            if (verb is null)
+            {
+                var normalized = trimmed.TrimStart('-', '/').ToLowerInvariant();
+                if (normalized is "translate" or "polish" or "ocr" or "silent-ocr" or "silentocr" or "input" or "settings")
+                {
+                    verb = normalized;
+                    continue;
+                }
+            }
+            else if (!trimmed.StartsWith("--", StringComparison.Ordinal))
+            {
+                payloadParts.Add(trimmed);
+            }
+        }
+
+        if (verb is null)
+        {
+            return false;
+        }
+
+        var trailingText = payloadParts.Count > 0 ? string.Join(' ', payloadParts) : null;
+        var fgHwnd = _windowHelperService.GetForegroundWindowHandle();
+        var cursor = _windowHelperService.GetCursorPosition();
+
+        switch (verb)
+        {
+            case "translate":
+                if (!string.IsNullOrWhiteSpace(trailingText))
+                {
+                    OpenInputTranslation(trailingText, fgHwnd);
+                }
+                else
+                {
+                    await HandleSelectionTranslateHotkeyAsync(
+                        new HotkeyPressedEventArgs(HotkeyAction.SelectionTranslate, HotkeyGesture.Empty, cursor, fgHwnd));
+                }
+                return true;
+
+            case "polish":
+                if (!string.IsNullOrWhiteSpace(trailingText))
+                {
+                    OpenInputPolish(trailingText, fgHwnd);
+                }
+                else
+                {
+                    await HandleSelectionPolishHotkeyAsync(
+                        new HotkeyPressedEventArgs(HotkeyAction.SelectionPolish, HotkeyGesture.Empty, cursor, fgHwnd));
+                }
+                return true;
+
+            case "ocr":
+                await TriggerScreenshotTranslationAsync(forceSilentCopyOnly: false);
+                return true;
+
+            case "silent-ocr":
+            case "silentocr":
+                await TriggerScreenshotTranslationAsync(forceSilentCopyOnly: true);
+                return true;
+
+            case "input":
+                OpenInputTranslation(trailingText, fgHwnd);
+                return true;
+
+            case "settings":
+                await OpenSettingsAsync(trailingText);
+                return true;
+
+            default:
+                return false;
+        }
+    }
+
+    private static bool HasFlag(string[] args, params string[] candidates)
+    {
+        foreach (var arg in args)
+        {
+            foreach (var candidate in candidates)
+            {
+                if (string.Equals(arg?.Trim(), candidate, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     private void OnGlobalHotkeyPressed(object? sender, HotkeyPressedEventArgs e)
     {
         EnqueueUi(() => _ = HandleHotkeyAsync(e));
@@ -296,15 +641,19 @@ public sealed class AppCoordinator : IDisposable
                 break;
 
             case HotkeyAction.InputTranslate:
-                OpenInputTranslation();
+                OpenInputTranslation(sourceWindowHandle: args.ForegroundWindowHandle);
                 break;
 
             case HotkeyAction.ScreenshotTranslate:
-                await TriggerScreenshotTranslationAsync();
+                await TriggerScreenshotTranslationAsync(forceSilentCopyOnly: false);
                 break;
 
             case HotkeyAction.SelectionPolish:
                 await HandleSelectionPolishHotkeyAsync(args);
+                break;
+
+            case HotkeyAction.SilentOcr:
+                await TriggerScreenshotTranslationAsync(forceSilentCopyOnly: true);
                 break;
         }
     }
@@ -317,6 +666,11 @@ public sealed class AppCoordinator : IDisposable
         }
 
         _hoverIconWindow?.HideIcon();
+        var sourceHwnd = SanitizeSourceWindowHandle(args.ForegroundWindowHandle);
+        _lastSourceWindowHandle = sourceHwnd;
+        _popupViewModel.SetSourceWindowHandle(sourceHwnd);
+
+        ClipboardLoopGuard.SuppressFor(TimeSpan.FromMilliseconds(900));
 
         try
         {
@@ -356,6 +710,11 @@ public sealed class AppCoordinator : IDisposable
         }
 
         _hoverIconWindow?.HideIcon();
+        var sourceHwnd = SanitizeSourceWindowHandle(args.ForegroundWindowHandle);
+        _lastSourceWindowHandle = sourceHwnd;
+        _popupViewModel.SetSourceWindowHandle(sourceHwnd);
+
+        ClipboardLoopGuard.SuppressFor(TimeSpan.FromMilliseconds(900));
 
         try
         {
@@ -387,6 +746,75 @@ public sealed class AppCoordinator : IDisposable
         }
     }
 
+    private void OnDoubleTapCopyDetected(object? sender, nint foregroundHwnd)
+    {
+        EnqueueUi(() => _ = HandleDoubleTapCopyAsync(foregroundHwnd));
+    }
+
+    private async Task HandleDoubleTapCopyAsync(nint foregroundHwnd)
+    {
+        if (_disposed || _popupWindow is null || !_settingsStore.Current.Hotkeys.EnableDoubleTapCopy)
+        {
+            return;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        if ((now - _lastDoubleTapHandledUtc).TotalMilliseconds < 350)
+        {
+            return;
+        }
+
+        _lastDoubleTapHandledUtc = now;
+        var sourceHwnd = SanitizeSourceWindowHandle(foregroundHwnd);
+        if (sourceHwnd == 0 && IsOwnWindow(foregroundHwnd))
+        {
+            return;
+        }
+
+        if (_foregroundAppGuard.IsForegroundAppSuppressed(_settingsStore.Current.Selection, out _, out _))
+        {
+            return;
+        }
+
+        _hoverIconWindow?.HideIcon();
+        _lastSourceWindowHandle = sourceHwnd;
+        _popupViewModel.SetSourceWindowHandle(sourceHwnd);
+        ClipboardLoopGuard.SuppressFor(TimeSpan.FromMilliseconds(900));
+
+        // Give the target window a moment to commit its native Ctrl+C text to the clipboard.
+        await Task.Delay(55);
+
+        var text = await TryReadClipboardTextAsync();
+        if (string.IsNullOrWhiteSpace(text) && sourceHwnd != 0)
+        {
+            try
+            {
+                var captured = await _textSelectionService.CaptureSelectionAsync(
+                    SelectionTriggerSource.Hotkey,
+                    _settingsStore.Current.Selection,
+                    sourceHwnd);
+                if (captured.IsSuccess && !string.IsNullOrWhiteSpace(captured.Text))
+                {
+                    text = captured.Text;
+                }
+            }
+            catch
+            {
+                // Ignore fallback failure on double-tap copy.
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        var cursor = _windowHelperService.GetCursorPosition();
+        _popupViewModel.PrepareForInput();
+        _popupWindow.ShowPopup(cursor, focusSourceInput: false);
+        await _popupViewModel.TranslateTextAsync(text, isFromOcr: false, resetLanguageSelection: true);
+    }
+
     private void OnSelectionHoverDetected(object? sender, HoverSelectionEventArgs e)
     {
         EnqueueUi(() =>
@@ -396,13 +824,20 @@ public sealed class AppCoordinator : IDisposable
                 return;
             }
 
-            if (!_settingsStore.Current.Selection.EnableHoverIcon)
+            if (!_settingsStore.Current.Selection.EnableHoverIcon || IsHoverMuted)
             {
                 return;
             }
 
             _pendingHoverSelection = e;
-            _hoverIconWindow.ShowAt(e.AnchorPoint, _settingsStore.Current.Selection.HoverIconAutoDismissMs);
+            var processName = !string.IsNullOrWhiteSpace(e.SourceProcessName)
+                ? e.SourceProcessName
+                : _foregroundAppGuard.GetProcessNameForWindow(e.SourceWindowHandle);
+
+            _hoverIconWindow.ShowAt(
+                e.AnchorPoint,
+                _settingsStore.Current.Selection.HoverIconAutoDismissMs,
+                processName);
         });
     }
 
@@ -415,7 +850,7 @@ public sealed class AppCoordinator : IDisposable
         });
     }
 
-    private void OnHoverIconClicked(object? sender, EventArgs e)
+    private void OnHoverTranslateClicked(object? sender, EventArgs e)
     {
         var pending = _pendingHoverSelection;
         _pendingHoverSelection = null;
@@ -425,26 +860,55 @@ public sealed class AppCoordinator : IDisposable
             return;
         }
 
-        _ = HandleHoverIconClickAsync(pending);
+        _ = HandleHoverActionAsync(pending, polishMode: false);
     }
 
-    private async Task HandleHoverIconClickAsync(HoverSelectionEventArgs pending)
+    private void OnHoverPolishClicked(object? sender, EventArgs e)
+    {
+        var pending = _pendingHoverSelection;
+        _pendingHoverSelection = null;
+
+        if (pending is null || _popupWindow is null)
+        {
+            return;
+        }
+
+        _ = HandleHoverActionAsync(pending, polishMode: true);
+    }
+
+    private async Task HandleHoverActionAsync(HoverSelectionEventArgs pending, bool polishMode)
     {
         if (_popupWindow is null)
         {
             return;
         }
 
+        var sourceHwnd = SanitizeSourceWindowHandle(pending.SourceWindowHandle);
+        _lastSourceWindowHandle = sourceHwnd;
+        _popupViewModel.SetSourceWindowHandle(sourceHwnd);
+
         // Fast zero-clipboard path when UIA already supplied the selected preview text.
         if (pending.HasUiaText && !string.IsNullOrWhiteSpace(pending.PreviewText))
         {
-            _popupViewModel.PrepareForInput();
-            _popupWindow.ShowPopup(pending.AnchorPoint, focusSourceInput: false);
-            await _popupViewModel.TranslateTextAsync(pending.PreviewText, isFromOcr: false, resetLanguageSelection: true);
+            if (polishMode)
+            {
+                _popupViewModel.PrepareForPolishInput();
+                _popupWindow.ShowPopup(pending.AnchorPoint, focusSourceInput: false);
+                await _popupViewModel.PolishTextAsync(pending.PreviewText, resetStyleToDefault: true);
+            }
+            else
+            {
+                _popupViewModel.PrepareForInput();
+                _popupWindow.ShowPopup(pending.AnchorPoint, focusSourceInput: false);
+                await _popupViewModel.TranslateTextAsync(pending.PreviewText, isFromOcr: false, resetLanguageSelection: true);
+            }
+
             return;
         }
 
-        // Fallback capture ONLY after explicit user click on the floating icon.
+        ClipboardLoopGuard.SuppressFor(TimeSpan.FromMilliseconds(900));
+
+        // Fallback capture ONLY after explicit user click on the floating pill.
         try
         {
             var captured = await _textSelectionService.CaptureSelectionAsync(
@@ -454,24 +918,222 @@ public sealed class AppCoordinator : IDisposable
 
             if (captured.IsSuccess && !string.IsNullOrWhiteSpace(captured.Text))
             {
-                _popupViewModel.PrepareForInput();
-                _popupWindow.ShowPopup(pending.AnchorPoint, focusSourceInput: false);
-                await _popupViewModel.TranslateTextAsync(captured.Text, isFromOcr: false, resetLanguageSelection: true);
+                if (polishMode)
+                {
+                    _popupViewModel.PrepareForPolishInput();
+                    _popupWindow.ShowPopup(pending.AnchorPoint, focusSourceInput: false);
+                    await _popupViewModel.PolishTextAsync(captured.Text, resetStyleToDefault: true);
+                }
+                else
+                {
+                    _popupViewModel.PrepareForInput();
+                    _popupWindow.ShowPopup(pending.AnchorPoint, focusSourceInput: false);
+                    await _popupViewModel.TranslateTextAsync(captured.Text, isFromOcr: false, resetLanguageSelection: true);
+                }
             }
             else
             {
-                _popupViewModel.PrepareForInput(
-                    string.IsNullOrWhiteSpace(captured.FailureReason)
-                        ? "未能从目标窗口读取选区，请直接输入或粘贴。"
-                        : captured.FailureReason);
+                var fallbackMsg = string.IsNullOrWhiteSpace(captured.FailureReason)
+                    ? "未能从目标窗口读取选区，请直接输入或粘贴。"
+                    : captured.FailureReason;
+                if (polishMode)
+                {
+                    _popupViewModel.PrepareForPolishInput(fallbackMsg);
+                }
+                else
+                {
+                    _popupViewModel.PrepareForInput(fallbackMsg);
+                }
+
                 _popupWindow.ShowPopup(pending.AnchorPoint, focusSourceInput: true);
             }
         }
         catch (Exception ex)
         {
-            _popupViewModel.PrepareForInput();
+            if (polishMode)
+            {
+                _popupViewModel.PrepareForPolishInput();
+            }
+            else
+            {
+                _popupViewModel.PrepareForInput();
+            }
+
             _popupWindow.ShowPopup(pending.AnchorPoint, focusSourceInput: true);
             _popupViewModel.ShowStatusError($"划词读取失败：{ex.Message}");
+        }
+    }
+
+    private void SetHoverMute(TimeSpan? duration)
+    {
+        _hoverMuteExpiryTimer?.Stop();
+
+        if (duration is { TotalMilliseconds: > 0 } validDuration)
+        {
+            _hoverMutedUntilUtc = DateTimeOffset.UtcNow.Add(validDuration);
+            _hoverIconWindow?.HideIcon();
+
+            if (_uiDispatcher is not null)
+            {
+                _hoverMuteExpiryTimer ??= CreateHoverMuteExpiryTimer(_uiDispatcher);
+                _hoverMuteExpiryTimer.Interval = validDuration;
+                _hoverMuteExpiryTimer.Start();
+            }
+        }
+        else
+        {
+            _hoverMutedUntilUtc = null;
+        }
+
+        var current = _settingsStore.Current;
+        ApplyHoverAndDoubleTapConfig(current.Selection, current.Hotkeys);
+        _trayIconHost.UpdateState(current, SafeIsAdmin(), IsHoverMuted, _isClipboardListenerEnabled);
+    }
+
+    private DispatcherQueueTimer CreateHoverMuteExpiryTimer(DispatcherQueue dispatcher)
+    {
+        var timer = dispatcher.CreateTimer();
+        timer.IsRepeating = false;
+        timer.Tick += (_, _) =>
+        {
+            _hoverMutedUntilUtc = null;
+            if (!_disposed)
+            {
+                var current = _settingsStore.Current;
+                ApplyHoverAndDoubleTapConfig(current.Selection, current.Hotkeys);
+                _trayIconHost.UpdateState(current, SafeIsAdmin(), isHoverMuted: false, _isClipboardListenerEnabled);
+            }
+        };
+        return timer;
+    }
+
+    private void SetClipboardListenerEnabled(bool enabled)
+    {
+        if (_isClipboardListenerEnabled == enabled)
+        {
+            return;
+        }
+
+        _isClipboardListenerEnabled = enabled;
+        _lastClipboardListenerText = null;
+
+        try
+        {
+            if (enabled)
+            {
+                Clipboard.ContentChanged += OnSystemClipboardContentChanged;
+            }
+            else
+            {
+                Clipboard.ContentChanged -= OnSystemClipboardContentChanged;
+            }
+        }
+        catch (Exception ex)
+        {
+            AppDiagnosticsLogger.Warn("ClipboardListener", "Failed to toggle system clipboard listener.", ex);
+        }
+
+        _trayIconHost.UpdateState(_settingsStore.Current, SafeIsAdmin(), IsHoverMuted, _isClipboardListenerEnabled);
+    }
+
+    private void OnSystemClipboardContentChanged(object? sender, object e)
+    {
+        if (!_isClipboardListenerEnabled || _disposed || ClipboardLoopGuard.ShouldIgnoreClipboardEvent())
+        {
+            return;
+        }
+
+        EnqueueUi(() => _ = HandleClipboardListenerChangeAsync());
+    }
+
+    private async Task HandleClipboardListenerChangeAsync()
+    {
+        if (!_isClipboardListenerEnabled || _disposed || _popupWindow is null || _screenshotCaptureService.IsCaptureActive)
+        {
+            return;
+        }
+
+        if (ClipboardLoopGuard.ShouldIgnoreClipboardEvent())
+        {
+            return;
+        }
+
+        var text = await TryReadClipboardTextAsync();
+        if (string.IsNullOrWhiteSpace(text) ||
+            text.Length > MaxClipboardAutoTranslateLength ||
+            ClipboardLoopGuard.ShouldIgnoreClipboardEvent(text) ||
+            string.Equals(text, _lastClipboardListenerText, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastClipboardListenerText = text;
+        var fgHwnd = _windowHelperService.GetForegroundWindowHandle();
+        var sourceHwnd = SanitizeSourceWindowHandle(fgHwnd);
+        if (sourceHwnd != 0)
+        {
+            _lastSourceWindowHandle = sourceHwnd;
+        }
+
+        _popupViewModel.SetSourceWindowHandle(_lastSourceWindowHandle);
+
+        _hoverIconWindow?.HideIcon();
+        var cursor = _windowHelperService.GetCursorPosition();
+        _popupViewModel.PrepareForInput();
+        _popupWindow.ShowPopup(cursor, focusSourceInput: false);
+        await _popupViewModel.TranslateTextAsync(text, isFromOcr: false, resetLanguageSelection: true);
+    }
+
+    private static async Task<string?> TryReadClipboardTextAsync()
+    {
+        try
+        {
+            var view = Clipboard.GetContent();
+            if (view is not null && view.Contains(StandardDataFormats.Text))
+            {
+                return await view.GetTextAsync();
+            }
+        }
+        catch
+        {
+            // Ignore transient clipboard lock contention.
+        }
+
+        return null;
+    }
+
+    private async Task AddProcessToBlacklistAsync(string processName)
+    {
+        if (string.IsNullOrWhiteSpace(processName))
+        {
+            return;
+        }
+
+        var normalized = Path.GetFileName(processName.Trim());
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return;
+        }
+
+        if (!normalized.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+        {
+            normalized = $"{normalized}.exe";
+        }
+
+        try
+        {
+            var updated = _settingsStore.Current.Clone();
+            updated.Selection.ProcessBlacklist ??= [];
+            if (!updated.Selection.ProcessBlacklist.Any(p => string.Equals(p, normalized, StringComparison.OrdinalIgnoreCase)))
+            {
+                updated.Selection.ProcessBlacklist.Add(normalized);
+                await _settingsStore.SaveAsync(updated);
+                AppDiagnosticsLogger.Info("Selection", $"Added process '{normalized}' to hover blacklist.");
+            }
+        }
+        catch (Exception ex)
+        {
+            AppDiagnosticsLogger.Warn("Selection", "Failed to persist process blacklist addition.", ex);
         }
     }
 
@@ -479,6 +1141,11 @@ public sealed class AppCoordinator : IDisposable
     {
         try
         {
+            if (enabled && IsHoverMuted)
+            {
+                SetHoverMute(null);
+            }
+
             var updated = _settingsStore.Current.Clone();
             updated.Selection.EnableHoverIcon = enabled;
             await _settingsStore.SaveAsync(updated);
@@ -548,12 +1215,12 @@ public sealed class AppCoordinator : IDisposable
             }
 
             ApplyHotkeys(settings.Hotkeys, force: false);
-            ApplyHoverMonitorConfig(settings.Selection);
+            ApplyHoverAndDoubleTapConfig(settings.Selection, settings.Hotkeys);
 
             _hoverIconWindow?.ApplyTheme(settings.Window.Theme);
             _popupWindow?.ApplySettings(settings);
             _settingsWindow?.ApplyTheme(settings.Window.Theme);
-            _trayIconHost.UpdateState(settings, SafeIsAdmin());
+            _trayIconHost.UpdateState(settings, SafeIsAdmin(), IsHoverMuted, _isClipboardListenerEnabled);
         });
     }
 
@@ -569,9 +1236,17 @@ public sealed class AppCoordinator : IDisposable
         _settingsViewModel.UpdateHotkeyRegistrationResults(_lastHotkeyResults);
     }
 
-    private void ApplyHoverMonitorConfig(SelectionConfig selectionConfig)
+    private void ApplyHoverAndDoubleTapConfig(SelectionConfig selectionConfig, HotkeyConfig hotkeyConfig)
     {
-        if (selectionConfig.EnableHoverIcon)
+        _selectionHoverMonitor.SetDoubleTapCopyEnabled(hotkeyConfig.EnableDoubleTapCopy);
+
+        var shouldRunMonitor = (selectionConfig.EnableHoverIcon && !IsHoverMuted) || hotkeyConfig.EnableDoubleTapCopy;
+        if (!selectionConfig.EnableHoverIcon || IsHoverMuted)
+        {
+            _hoverIconWindow?.HideIcon();
+        }
+
+        if (shouldRunMonitor)
         {
             if (_selectionHoverMonitor.IsRunning)
             {
@@ -584,7 +1259,6 @@ public sealed class AppCoordinator : IDisposable
         }
         else
         {
-            _hoverIconWindow?.HideIcon();
             if (_selectionHoverMonitor.IsRunning)
             {
                 _selectionHoverMonitor.Stop();
@@ -592,12 +1266,23 @@ public sealed class AppCoordinator : IDisposable
         }
     }
 
+    private nint SanitizeSourceWindowHandle(nint hwnd) =>
+        hwnd == 0 || IsOwnWindow(hwnd) ? 0 : hwnd;
+
+    private bool IsOwnWindow(nint hwnd) =>
+        hwnd != 0 &&
+        (hwnd == _popupWindow?.WindowHandle ||
+         hwnd == _hoverIconWindow?.WindowHandle ||
+         hwnd == _settingsWindow?.WindowHandle);
+
     private static bool HotkeysEqual(HotkeyConfig? left, HotkeyConfig right) =>
         left is not null &&
         left.SelectionTranslate == right.SelectionTranslate &&
         left.InputTranslate == right.InputTranslate &&
         left.ScreenshotTranslate == right.ScreenshotTranslate &&
-        left.SelectionPolish == right.SelectionPolish;
+        left.SelectionPolish == right.SelectionPolish &&
+        left.SilentOcr == right.SilentOcr &&
+        left.EnableDoubleTapCopy == right.EnableDoubleTapCopy;
 
     private static bool ProxiesEqual(ProxyConfig? left, ProxyConfig right) =>
         left is not null &&
@@ -640,11 +1325,20 @@ public sealed class AppCoordinator : IDisposable
         }
 
         _disposed = true;
+        _hoverMuteExpiryTimer?.Stop();
+
+        if (_isClipboardListenerEnabled)
+        {
+            try { Clipboard.ContentChanged -= OnSystemClipboardContentChanged; } catch { }
+            _isClipboardListenerEnabled = false;
+        }
 
         _settingsStore.SettingsChanged -= OnSettingsChanged;
         _globalHotkeyService.HotkeyPressed -= OnGlobalHotkeyPressed;
         _selectionHoverMonitor.SelectionDetected -= OnSelectionHoverDetected;
         _selectionHoverMonitor.DismissRequested -= OnSelectionHoverDismissRequested;
+        _selectionHoverMonitor.DoubleTapCopyDetected -= OnDoubleTapCopyDetected;
+        _singleInstanceGuard.SecondInstanceArgumentsReceived -= OnSecondInstanceArgumentsReceived;
 
         _popupViewModel.CancelActiveTranslation();
 

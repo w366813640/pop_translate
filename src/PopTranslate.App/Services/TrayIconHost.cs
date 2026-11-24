@@ -20,7 +20,10 @@ public sealed class TrayIconHost : IDisposable
     private MenuFlyoutItem? _inputTranslateItem;
     private MenuFlyoutItem? _polishInputItem;
     private MenuFlyoutItem? _screenshotTranslateItem;
+    private MenuFlyoutItem? _silentOcrItem;
     private ToggleMenuFlyoutItem? _hoverIconToggleItem;
+    private ToggleMenuFlyoutItem? _hoverMuteToggleItem;
+    private ToggleMenuFlyoutItem? _clipboardListenerToggleItem;
     private MenuFlyoutItem? _restartAsAdminItem;
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _createRetryTimer;
     private string _latestToolTipText = "PopTranslate 翻译";
@@ -30,7 +33,10 @@ public sealed class TrayIconHost : IDisposable
     public event EventHandler? InputTranslateRequested;
     public event EventHandler? PolishInputRequested;
     public event EventHandler? ScreenshotTranslateRequested;
+    public event EventHandler? SilentOcrRequested;
     public event EventHandler<bool>? HoverIconToggled;
+    public event EventHandler<bool>? HoverMuteToggled;
+    public event EventHandler<bool>? ClipboardListenerToggled;
     public event EventHandler? SettingsRequested;
     public event EventHandler? RestartAsAdministratorRequested;
     public event EventHandler? ExitRequested;
@@ -38,17 +44,19 @@ public sealed class TrayIconHost : IDisposable
     public void Initialize(
         AppSettings settings,
         bool isRunningAsAdministrator,
-        DispatcherQueue? uiDispatcher = null)
+        DispatcherQueue? uiDispatcher = null,
+        bool isHoverMuted = false,
+        bool isClipboardListenerEnabled = false)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
         if (_taskbarIcon is not null)
         {
-            UpdateState(settings, isRunningAsAdministrator);
+            UpdateState(settings, isRunningAsAdministrator, isHoverMuted, isClipboardListenerEnabled);
             return;
         }
 
-        _latestToolTipText = isRunningAsAdministrator ? "PopTranslate 翻译 (管理员)" : "PopTranslate 翻译";
+        _latestToolTipText = BuildToolTipText(isRunningAsAdministrator, isHoverMuted, isClipboardListenerEnabled);
 
         var flyout = new MenuFlyout();
 
@@ -61,7 +69,7 @@ public sealed class TrayIconHost : IDisposable
 
         _polishInputItem = new MenuFlyoutItem
         {
-            Text = "文本润色",
+            Text = FormatMenuLabel("文本润色", settings.Hotkeys.SelectionPolish),
             Icon = new FontIcon { Glyph = "\uE70F" },
         };
         _polishInputItem.Click += (_, _) => PolishInputRequested?.Invoke(this, EventArgs.Empty);
@@ -72,6 +80,13 @@ public sealed class TrayIconHost : IDisposable
             Icon = new FontIcon { Glyph = "\uE722" },
         };
         _screenshotTranslateItem.Click += (_, _) => ScreenshotTranslateRequested?.Invoke(this, EventArgs.Empty);
+
+        _silentOcrItem = new MenuFlyoutItem
+        {
+            Text = FormatMenuLabel("静默截图 OCR", settings.Hotkeys.SilentOcr),
+            Icon = new FontIcon { Glyph = "\uE8C8" },
+        };
+        _silentOcrItem.Click += (_, _) => SilentOcrRequested?.Invoke(this, EventArgs.Empty);
 
         _hoverIconToggleItem = new ToggleMenuFlyoutItem
         {
@@ -87,6 +102,38 @@ public sealed class TrayIconHost : IDisposable
             }
 
             HoverIconToggled?.Invoke(this, _hoverIconToggleItem.IsChecked);
+        };
+
+        _hoverMuteToggleItem = new ToggleMenuFlyoutItem
+        {
+            Text = isHoverMuted ? "暂停划词 30 分钟 (已暂停)" : "暂停划词 30 分钟",
+            IsChecked = isHoverMuted,
+            Icon = new FontIcon { Glyph = "\uE769" },
+        };
+        _hoverMuteToggleItem.Click += (_, _) =>
+        {
+            if (_isUpdatingState || _hoverMuteToggleItem is null)
+            {
+                return;
+            }
+
+            HoverMuteToggled?.Invoke(this, _hoverMuteToggleItem.IsChecked);
+        };
+
+        _clipboardListenerToggleItem = new ToggleMenuFlyoutItem
+        {
+            Text = "监听剪贴板翻译",
+            IsChecked = isClipboardListenerEnabled,
+            Icon = new FontIcon { Glyph = "\uE77F" },
+        };
+        _clipboardListenerToggleItem.Click += (_, _) =>
+        {
+            if (_isUpdatingState || _clipboardListenerToggleItem is null)
+            {
+                return;
+            }
+
+            ClipboardListenerToggled?.Invoke(this, _clipboardListenerToggleItem.IsChecked);
         };
 
         var settingsItem = new MenuFlyoutItem
@@ -114,8 +161,11 @@ public sealed class TrayIconHost : IDisposable
         flyout.Items.Add(_inputTranslateItem);
         flyout.Items.Add(_polishInputItem);
         flyout.Items.Add(_screenshotTranslateItem);
+        flyout.Items.Add(_silentOcrItem);
         flyout.Items.Add(new MenuFlyoutSeparator());
         flyout.Items.Add(_hoverIconToggleItem);
+        flyout.Items.Add(_hoverMuteToggleItem);
+        flyout.Items.Add(_clipboardListenerToggleItem);
         flyout.Items.Add(new MenuFlyoutSeparator());
         flyout.Items.Add(settingsItem);
         flyout.Items.Add(_restartAsAdminItem);
@@ -140,7 +190,11 @@ public sealed class TrayIconHost : IDisposable
         }
     }
 
-    public void UpdateState(AppSettings settings, bool isRunningAsAdministrator)
+    public void UpdateState(
+        AppSettings settings,
+        bool isRunningAsAdministrator,
+        bool isHoverMuted = false,
+        bool isClipboardListenerEnabled = false)
     {
         if (_disposed || _taskbarIcon is null)
         {
@@ -150,7 +204,7 @@ public sealed class TrayIconHost : IDisposable
         _isUpdatingState = true;
         try
         {
-            _latestToolTipText = isRunningAsAdministrator ? "PopTranslate 翻译 (管理员)" : "PopTranslate 翻译";
+            _latestToolTipText = BuildToolTipText(isRunningAsAdministrator, isHoverMuted, isClipboardListenerEnabled);
 
             if (_taskbarIcon.IsCreated)
             {
@@ -169,14 +223,35 @@ public sealed class TrayIconHost : IDisposable
                 _inputTranslateItem.Text = FormatMenuLabel("输入翻译", settings.Hotkeys.InputTranslate);
             }
 
+            if (_polishInputItem is not null)
+            {
+                _polishInputItem.Text = FormatMenuLabel("文本润色", settings.Hotkeys.SelectionPolish);
+            }
+
             if (_screenshotTranslateItem is not null)
             {
                 _screenshotTranslateItem.Text = FormatMenuLabel("截图翻译", settings.Hotkeys.ScreenshotTranslate);
             }
 
+            if (_silentOcrItem is not null)
+            {
+                _silentOcrItem.Text = FormatMenuLabel("静默截图 OCR", settings.Hotkeys.SilentOcr);
+            }
+
             if (_hoverIconToggleItem is not null)
             {
                 _hoverIconToggleItem.IsChecked = settings.Selection.EnableHoverIcon;
+            }
+
+            if (_hoverMuteToggleItem is not null)
+            {
+                _hoverMuteToggleItem.IsChecked = isHoverMuted;
+                _hoverMuteToggleItem.Text = isHoverMuted ? "暂停划词 30 分钟 (已暂停)" : "暂停划词 30 分钟";
+            }
+
+            if (_clipboardListenerToggleItem is not null)
+            {
+                _clipboardListenerToggleItem.IsChecked = isClipboardListenerEnabled;
             }
 
             if (_restartAsAdminItem is not null)
@@ -189,6 +264,30 @@ public sealed class TrayIconHost : IDisposable
         {
             _isUpdatingState = false;
         }
+    }
+
+    private static string BuildToolTipText(
+        bool isRunningAsAdministrator,
+        bool isHoverMuted,
+        bool isClipboardListenerEnabled)
+    {
+        var baseText = isRunningAsAdministrator ? "PopTranslate 翻译 (管理员)" : "PopTranslate 翻译";
+        if (isHoverMuted && isClipboardListenerEnabled)
+        {
+            return $"{baseText} · 划词已暂停 · 剪贴板监听中";
+        }
+
+        if (isHoverMuted)
+        {
+            return $"{baseText} · 划词已暂停";
+        }
+
+        if (isClipboardListenerEnabled)
+        {
+            return $"{baseText} · 剪贴板监听中";
+        }
+
+        return baseText;
     }
 
     private bool TryForceCreateTrayIcon()
@@ -275,8 +374,8 @@ public sealed class TrayIconHost : IDisposable
         }
     }
 
-    private static string FormatMenuLabel(string title, HotkeyGesture gesture) =>
-        gesture.IsEmpty ? title : $"{title} ({gesture.DisplayText})";
+    private static string FormatMenuLabel(string title, HotkeyGesture? gesture) =>
+        gesture is null || gesture.IsEmpty ? title : $"{title} ({gesture.DisplayText})";
 
     public void Dispose()
     {
