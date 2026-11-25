@@ -631,7 +631,8 @@
             VerticalScrollMode="Auto"
             VerticalScrollBarVisibility="Hidden"
             HorizontalScrollMode="Disabled"
-            HorizontalScrollBarVisibility="Disabled">
+            HorizontalScrollBarVisibility="Disabled"
+            ViewChanged="CardsScrollViewer_ViewChanged">
             <StackPanel
                 x:Name="CardsContentPanel"
                 VerticalAlignment="Top"

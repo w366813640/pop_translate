@@ -423,6 +423,7 @@
 
                 <!-- Collapsible Body (6px clean spacing below header, no horizontal divider line) -->
                 <StackPanel
+                    x:Name="CardBodyPanel"
                     Visibility="{x:Bind ViewModel.IsExpanded, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
                     Spacing="6">
 

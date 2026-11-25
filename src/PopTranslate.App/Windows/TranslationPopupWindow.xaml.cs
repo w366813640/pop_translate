@@ -1,13 +1,16 @@
 using System.ComponentModel;
+using System.Numerics;
 using PopTranslate.App.Services;
 using PopTranslate.App.ViewModels;
 using PopTranslate.Core.Contracts;
 using PopTranslate.Core.Models;
+using Microsoft.UI.Composition;
 using Microsoft.UI.Input;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
+using Microsoft.UI.Xaml.Hosting;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Windows.Graphics;
@@ -24,9 +27,11 @@ public sealed partial class TranslationPopupWindow : WindowEx
     private const double MinPopupWidthDips = 360;
     private const double MaxPopupWidthDips = 760;
     private static readonly TimeSpan HeightThrottleInterval = TimeSpan.FromMilliseconds(60);
+    private static readonly TimeSpan PostStreamSettleDelay = TimeSpan.FromMilliseconds(180);
 
     private readonly IWindowHelperService _windowHelperService;
     private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _heightThrottleTimer;
+    private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _postStreamSettleTimer;
     private WindowBehaviorConfig _behaviorConfig = new();
     private nint _hwnd;
     private bool _isPopupVisible;
@@ -35,6 +40,8 @@ public sealed partial class TranslationPopupWindow : WindowEx
     private bool _isResizeQueued;
     private bool _isManualHeightLocked;
     private bool _isInternalFlyoutOpen;
+    private bool _hadActiveStreamingInSession;
+    private bool _isUserPinnedToScrollBottom = true;
     private int _targetProgrammaticHeightPx;
     private int _openDropDownCount;
     private DateTimeOffset _lastShownUtc = DateTimeOffset.MinValue;
@@ -71,6 +78,18 @@ public sealed partial class TranslationPopupWindow : WindowEx
             {
                 _lastHeightUpdateUtc = DateTimeOffset.UtcNow;
                 UpdateWindowHeightToFitContent();
+            }
+        };
+
+        _postStreamSettleTimer = DispatcherQueue.CreateTimer();
+        _postStreamSettleTimer.Interval = PostStreamSettleDelay;
+        _postStreamSettleTimer.IsRepeating = false;
+        _postStreamSettleTimer.Tick += (_, _) =>
+        {
+            if (IsPopupVisible && !_isManualHeightLocked && !ViewModel.IsAnyCardLoading)
+            {
+                _lastHeightUpdateUtc = DateTimeOffset.UtcNow;
+                UpdateWindowHeightToFitContent(isPostStreamSettle: true);
             }
         };
 
@@ -135,11 +154,14 @@ public sealed partial class TranslationPopupWindow : WindowEx
     public void ShowPopup(ScreenPoint? anchorPoint, bool focusSourceInput, bool centerOnScreen = false)
     {
         _heightThrottleTimer.Stop();
+        _postStreamSettleTimer.Stop();
         _isManualHeightLocked = false;
+        _hadActiveStreamingInSession = ViewModel.IsAnyCardLoading;
+        _isUserPinnedToScrollBottom = true;
 
         var rawWidth = _behaviorConfig.PopupWidth > 0 ? _behaviorConfig.PopupWidth : DefaultFluentPopupWidthDips;
         var desiredWidthDips = Math.Clamp(rawWidth, MinPopupWidthDips, MaxPopupWidthDips);
-        var desiredHeightDips = CalculateDesiredHeightDips();
+        var desiredHeightDips = CalculateInitialDesiredHeightDips(desiredWidthDips);
 
         var anchor = anchorPoint ?? _windowHelperService.GetCursorPosition();
         var monitor = _windowHelperService.GetMonitorAtPoint(anchor);
@@ -191,6 +213,8 @@ public sealed partial class TranslationPopupWindow : WindowEx
     public void HidePopup(bool cancelTranslations = true)
     {
         _heightThrottleTimer.Stop();
+        _postStreamSettleTimer.Stop();
+        _hadActiveStreamingInSession = false;
 
         if (cancelTranslations)
         {
@@ -459,7 +483,7 @@ public sealed partial class TranslationPopupWindow : WindowEx
         });
     }
 
-    private void UpdateWindowHeightToFitContent()
+    private void UpdateWindowHeightToFitContent(bool isPostStreamSettle = false)
     {
         if (_isManualHeightLocked || _isDraggingToolbar)
         {
@@ -472,16 +496,48 @@ public sealed partial class TranslationPopupWindow : WindowEx
             scale = 1.0;
         }
 
-        var desiredHeightDips = CalculateDesiredHeightDips();
+        var maxHeightDips = Math.Clamp(_behaviorConfig.PopupMaxHeight, 300, 1000);
         var currentSizePx = AppWindow.Size;
-        var targetHeightPx = Math.Max(180, (int)Math.Ceiling(desiredHeightDips * scale));
+        var currentHeightDips = currentSizePx.Height / scale;
+        var isStreaming = ViewModel.IsAnyCardLoading;
+
+        if (isStreaming)
+        {
+            _hadActiveStreamingInSession = true;
+            _postStreamSettleTimer.Stop();
+        }
+        else if (_hadActiveStreamingInSession && !isPostStreamSettle)
+        {
+            _hadActiveStreamingInSession = false;
+            _postStreamSettleTimer.Start();
+            // Do not shrink on the exact completion frame; allow growth if needed and settle gently after PostStreamSettleDelay.
+        }
+
+        var measuredDesiredDips = CalculateMeasuredDesiredHeightDips();
+        var allowShrink = !isStreaming && (!_postStreamSettleTimer.IsRunning || isPostStreamSettle);
+        var resolvedHeightDips = PopupHeightPolicy.ResolveDynamicHeightDips(new PopupDynamicHeightInput(
+            CurrentHeightDips: currentHeightDips,
+            MeasuredDesiredHeightDips: measuredDesiredDips,
+            IsAnyCardLoading: isStreaming,
+            AllowShrink: allowShrink,
+            MinHeightDips: MinPopupHeightDips,
+            MaxHeightDips: maxHeightDips,
+            LookaheadStepDips: PopupHeightPolicy.DefaultLookaheadStepDips,
+            GrowDeadbandDips: 6.0,
+            ShrinkDeadbandDips: isPostStreamSettle
+                ? PopupHeightPolicy.DefaultPostStreamShrinkDeadbandDips
+                : 6.0));
+
+        var targetHeightPx = Math.Max(180, (int)Math.Ceiling(resolvedHeightDips * scale));
 
         if (Math.Abs(currentSizePx.Height - targetHeightPx) < 4)
         {
             _targetProgrammaticHeightPx = currentSizePx.Height;
+            TryAutoFollowScrollViewerDuringStreaming(isStreaming);
             return;
         }
 
+        var deltaDips = (targetHeightPx - currentSizePx.Height) / scale;
         var pos = AppWindow.Position;
         var monitor = _windowHelperService.GetMonitorAtPoint(new ScreenPoint(pos.X + currentSizePx.Width / 2, pos.Y + 20));
         var work = monitor.WorkArea;
@@ -510,6 +566,62 @@ public sealed partial class TranslationPopupWindow : WindowEx
         {
             _isProgrammaticResize = false;
         }
+
+        if (deltaDips > 12.0)
+        {
+            PlaySmoothScrollRevealAnimation(deltaDips);
+        }
+
+        TryAutoFollowScrollViewerDuringStreaming(isStreaming);
+    }
+
+    private void PlaySmoothScrollRevealAnimation(double deltaDips)
+    {
+        try
+        {
+            var visual = ElementCompositionPreview.GetElementVisual(CardsScrollViewer);
+            var compositor = visual.Compositor;
+            var clip = compositor.CreateInsetClip();
+            var startInset = (float)Math.Clamp(deltaDips, 12.0, 220.0);
+            clip.BottomInset = startInset;
+            visual.Clip = clip;
+
+            var easing = compositor.CreateCubicBezierEasingFunction(
+                new Vector2(0.1f, 0.9f),
+                new Vector2(0.2f, 1.0f));
+            var anim = compositor.CreateScalarKeyFrameAnimation();
+            anim.InsertKeyFrame(0f, startInset);
+            anim.InsertKeyFrame(1f, 0f, easing);
+            anim.Duration = TimeSpan.FromMilliseconds(180);
+
+            clip.StartAnimation(nameof(InsetClip.BottomInset), anim);
+        }
+        catch
+        {
+            // Composition reveal is purely cosmetic; ignore if visual tree is not ready.
+        }
+    }
+
+    private void TryAutoFollowScrollViewerDuringStreaming(bool isStreaming)
+    {
+        if (!isStreaming || !_isUserPinnedToScrollBottom || CardsScrollViewer.ScrollableHeight <= 4.0)
+        {
+            return;
+        }
+
+        CardsScrollViewer.ChangeView(
+            horizontalOffset: null,
+            verticalOffset: CardsScrollViewer.ScrollableHeight,
+            zoomFactor: null,
+            disableAnimation: false);
+    }
+
+    private void CardsScrollViewer_ViewChanged(object sender, ScrollViewerViewChangedEventArgs e)
+    {
+        _isUserPinnedToScrollBottom = CardsScrollViewer.ScrollableHeight <= 4.0 ||
+                                       PopupHeightPolicy.ShouldAutoFollowScrollBottom(
+                                           CardsScrollViewer.VerticalOffset,
+                                           CardsScrollViewer.ScrollableHeight);
     }
 
     public static ScreenPoint ResolvePopupPosition(
@@ -545,10 +657,36 @@ public sealed partial class TranslationPopupWindow : WindowEx
             cursorOffsetPx: cursorOffsetPx);
     }
 
-    private double CalculateDesiredHeightDips()
+    private double CalculateInitialDesiredHeightDips(double desiredWidthDips)
     {
         var maxHeightDips = Math.Clamp(_behaviorConfig.PopupMaxHeight, 300, 1000);
+        var baseChromeH = CalculateBaseChromeHeightDips();
+        var measuredCardsH = CalculateMeasuredCardsHeightDips();
 
+        var expandedActiveCards = ViewModel.ServiceCards.Count(c => c.IsLoading && !c.IsCollapsed);
+        var collapsedOrOnDemandCards = ViewModel.ServiceCards.Count(c => c.IsCollapsed || c.IsWaitingOnDemand);
+
+        return PopupHeightPolicy.EstimateInitialHeightDips(new PopupInitialHeightInput(
+            BaseChromeHeightDips: baseChromeH,
+            MeasuredCardsHeightDips: measuredCardsH,
+            SourceTextLength: ViewModel.SourceText?.Length ?? 0,
+            ExpandedActiveCardCount: expandedActiveCards,
+            CollapsedOrOnDemandCardCount: collapsedOrOnDemandCards,
+            IsAnyCardLoading: ViewModel.IsAnyCardLoading,
+            PopupWidthDips: desiredWidthDips,
+            MinHeightDips: MinPopupHeightDips,
+            MaxHeightDips: maxHeightDips));
+    }
+
+    private double CalculateMeasuredDesiredHeightDips()
+    {
+        var maxHeightDips = Math.Clamp(_behaviorConfig.PopupMaxHeight, 300, 1000);
+        var total = CalculateBaseChromeHeightDips() + CalculateMeasuredCardsHeightDips();
+        return Math.Clamp(total, MinPopupHeightDips, maxHeightDips);
+    }
+
+    private double CalculateBaseChromeHeightDips()
+    {
         var toolbarH = TopToolbarGrid.ActualHeight > 0 ? TopToolbarGrid.ActualHeight : 54;
         var fallbackSourceH = (ViewModel.IsSourceCardCollapsed ? 50 : 122) + (ViewModel.HasOcrContext ? 42 : 0);
         var sourceH = IsPopupVisible && SourceSectionPanel.ActualHeight > 0
@@ -557,13 +695,13 @@ public sealed partial class TranslationPopupWindow : WindowEx
         var bannerH = StatusBannerBorder.Visibility == Visibility.Visible && StatusBannerBorder.ActualHeight > 0
             ? StatusBannerBorder.ActualHeight + 10
             : 0;
-        var cardsH = ViewModel.ServiceCards.Count == 0 && !ViewModel.ShowNoEnabledProvidersHint && !ViewModel.HasPendingInputGuard
+        return toolbarH + sourceH + bannerH + 6;
+    }
+
+    private double CalculateMeasuredCardsHeightDips() =>
+        ViewModel.ServiceCards.Count == 0 && !ViewModel.ShowNoEnabledProvidersHint && !ViewModel.HasPendingInputGuard
             ? 64
             : (CardsContentPanel.ActualHeight > 0 ? CardsContentPanel.ActualHeight + 16 : 64);
-
-        var total = toolbarH + sourceH + bannerH + cardsH + 6;
-        return Math.Clamp(total, MinPopupHeightDips, maxHeightDips);
-    }
 
     private static ScreenPoint ClampTopLeftToWorkArea(
         IWindowHelperService windowHelperService,

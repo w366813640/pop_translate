@@ -124,6 +124,8 @@ public sealed partial class TranslationPopupViewModel : ObservableObject
 
     public bool HasHistory => HistoryEntries.Count > 0;
 
+    public bool IsAnyCardLoading => ServiceCards.Any(c => c.IsLoading);
+
     public bool ShowRestoreLastHistoryHint => ShowEmptyHint && HasHistory;
 
     public string RestoreLastHistoryLabel => HistoryEntries.Count > 0

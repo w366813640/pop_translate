@@ -1,10 +1,13 @@
 using System.ComponentModel;
+using System.Numerics;
 using PopTranslate.App.ViewModels;
 using PopTranslate.Core.Models;
+using Microsoft.UI.Composition;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Documents;
+using Microsoft.UI.Xaml.Hosting;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Windows.UI;
@@ -69,6 +72,7 @@ public sealed partial class TranslationResultCardControl : UserControl
     private ServiceCardViewModel? _flyoutNotifiedViewModel;
     private string? _lastRenderedMarkdownText;
     private ElementTheme _lastRenderedMarkdownTheme = ElementTheme.Default;
+    private bool _implicitOffsetAttached;
 
     public TranslationResultCardControl()
     {
@@ -95,6 +99,7 @@ public sealed partial class TranslationResultCardControl : UserControl
     private void OnControlLoaded(object sender, RoutedEventArgs e)
     {
         AttachViewModel(ViewModel);
+        EnsureImplicitOffsetAnimation();
     }
 
     private void OnControlUnloaded(object sender, RoutedEventArgs e)
@@ -162,6 +167,82 @@ public sealed partial class TranslationResultCardControl : UserControl
             or nameof(ServiceCardViewModel.State))
         {
             RenderFormattedMarkdown();
+        }
+
+        if (e.PropertyName == nameof(ServiceCardViewModel.IsCollapsed) &&
+            ViewModel is { IsExpanded: true })
+        {
+            PlayBodyExpandRevealAnimation();
+        }
+        else if (e.PropertyName == nameof(ServiceCardViewModel.ShowDiffText))
+        {
+            PlayBodyExpandRevealAnimation(offsetY: -3f);
+        }
+    }
+
+    private void EnsureImplicitOffsetAnimation()
+    {
+        if (_implicitOffsetAttached)
+        {
+            return;
+        }
+
+        try
+        {
+            var visual = ElementCompositionPreview.GetElementVisual(this);
+            var compositor = visual.Compositor;
+            var easing = compositor.CreateCubicBezierEasingFunction(
+                new Vector2(0.1f, 0.9f),
+                new Vector2(0.2f, 1.0f));
+
+            var offsetAnim = compositor.CreateVector3KeyFrameAnimation();
+            offsetAnim.Target = nameof(Visual.Offset);
+            offsetAnim.InsertExpressionKeyFrame(1f, "this.FinalValue", easing);
+            offsetAnim.Duration = TimeSpan.FromMilliseconds(180);
+
+            var implicitAnimations = compositor.CreateImplicitAnimationCollection();
+            implicitAnimations[nameof(Visual.Offset)] = offsetAnim;
+            visual.ImplicitAnimations = implicitAnimations;
+            _implicitOffsetAttached = true;
+        }
+        catch
+        {
+            // Purely visual enhancement; ignore if Composition visual is unavailable.
+        }
+    }
+
+    private void PlayBodyExpandRevealAnimation(float offsetY = -6f)
+    {
+        if (!IsLoaded)
+        {
+            return;
+        }
+
+        try
+        {
+            ElementCompositionPreview.SetIsTranslationEnabled(CardBodyPanel, true);
+            var visual = ElementCompositionPreview.GetElementVisual(CardBodyPanel);
+            var compositor = visual.Compositor;
+            var easing = compositor.CreateCubicBezierEasingFunction(
+                new Vector2(0.1f, 0.9f),
+                new Vector2(0.2f, 1.0f));
+
+            var opacityAnim = compositor.CreateScalarKeyFrameAnimation();
+            opacityAnim.InsertKeyFrame(0f, 0.2f);
+            opacityAnim.InsertKeyFrame(1f, 1f, easing);
+            opacityAnim.Duration = TimeSpan.FromMilliseconds(160);
+
+            var slideAnim = compositor.CreateScalarKeyFrameAnimation();
+            slideAnim.InsertKeyFrame(0f, offsetY);
+            slideAnim.InsertKeyFrame(1f, 0f, easing);
+            slideAnim.Duration = TimeSpan.FromMilliseconds(160);
+
+            visual.StartAnimation(nameof(Visual.Opacity), opacityAnim);
+            visual.StartAnimation("Translation.Y", slideAnim);
+        }
+        catch
+        {
+            // Purely visual enhancement; ignore if visual tree is unloading.
         }
     }
 
