@@ -100,6 +100,8 @@ public sealed partial class TranslationPopupWindow : WindowEx
     public event EventHandler? ScreenshotRequested;
     public event EventHandler<ScreenPoint>? FixedPositionMoved;
     public event EventHandler<double>? PopupWidthChanged;
+    public event EventHandler? PopupShown;
+    public event EventHandler? PopupHidden;
 
     public TranslationPopupViewModel ViewModel { get; }
 
@@ -130,7 +132,7 @@ public sealed partial class TranslationPopupWindow : WindowEx
         ApplyTopMostState(ViewModel.IsPinned);
     }
 
-    public void ShowPopup(ScreenPoint? anchorPoint, bool focusSourceInput)
+    public void ShowPopup(ScreenPoint? anchorPoint, bool focusSourceInput, bool centerOnScreen = false)
     {
         _heightThrottleTimer.Stop();
         _isManualHeightLocked = false;
@@ -147,26 +149,19 @@ public sealed partial class TranslationPopupWindow : WindowEx
         var heightPx = Math.Max(180, (int)Math.Ceiling(desiredHeightDips * scale));
         var cursorOffsetPx = Math.Max(8, (int)Math.Round(14 * scale));
 
-        ScreenPoint targetPos;
-        if (_behaviorConfig.PositionMode == WindowPositionMode.RememberFixedPosition)
-        {
-            targetPos = ClampTopLeftToWorkArea(
-                new ScreenPoint(_behaviorConfig.FixedX, _behaviorConfig.FixedY),
-                widthPx,
-                heightPx);
-        }
-        else
-        {
-            targetPos = _windowHelperService.CalculateClampedWindowPosition(
-                anchor,
-                widthPx,
-                heightPx,
-                cursorOffsetPx: cursorOffsetPx);
-        }
+        var targetPos = ResolvePopupPosition(
+            _windowHelperService,
+            _behaviorConfig,
+            anchor,
+            widthPx,
+            heightPx,
+            cursorOffsetPx,
+            centerOnScreen);
 
         _lastShownUtc = DateTimeOffset.UtcNow;
         _lastHeightUpdateUtc = _lastShownUtc;
         _isPopupVisible = true;
+        ViewModel.SetPopupVisible(true);
         _targetProgrammaticHeightPx = heightPx;
 
         _isProgrammaticResize = true;
@@ -190,6 +185,7 @@ public sealed partial class TranslationPopupWindow : WindowEx
         }
 
         ScheduleDynamicHeightUpdate();
+        PopupShown?.Invoke(this, EventArgs.Empty);
     }
 
     public void HidePopup(bool cancelTranslations = true)
@@ -212,11 +208,14 @@ public sealed partial class TranslationPopupWindow : WindowEx
         _hasDraggedDistance = false;
         _isManualHeightLocked = false;
         _isPopupVisible = false;
+        ViewModel.SetPopupVisible(false);
 
         if (AppWindow.IsVisible)
         {
             AppWindow.Hide();
         }
+
+        PopupHidden?.Invoke(this, EventArgs.Empty);
     }
 
     public void FocusSourceInput()
@@ -237,7 +236,8 @@ public sealed partial class TranslationPopupWindow : WindowEx
     {
         if (e.PropertyName is nameof(TranslationPopupViewModel.IsSourceCardCollapsed)
             or nameof(TranslationPopupViewModel.HasOcrContext)
-            or nameof(TranslationPopupViewModel.HasStatusBanner))
+            or nameof(TranslationPopupViewModel.HasStatusBanner)
+            or nameof(TranslationPopupViewModel.HasPendingInputGuard))
         {
             ScheduleDynamicHeightUpdate();
         }
@@ -311,6 +311,41 @@ public sealed partial class TranslationPopupWindow : WindowEx
             item.Click += (_, _) => ViewModel.SelectedOcrPromptMode = captured;
             OcrModeMenuFlyout.Items.Add(item);
         }
+    }
+
+    private void HistoryMenuFlyout_Opening(object? sender, object e)
+    {
+        MarkInternalFlyoutOpened();
+
+        HistoryMenuFlyout.Items.Clear();
+        if (ViewModel.HistoryEntries.Count == 0)
+        {
+            HistoryMenuFlyout.Items.Add(new MenuFlyoutItem
+            {
+                Text = "暂无翻译历史",
+                IsEnabled = false,
+            });
+            return;
+        }
+
+        foreach (var entry in ViewModel.HistoryEntries)
+        {
+            var capturedId = entry.Id;
+            var item = new MenuFlyoutItem
+            {
+                Text = $"{entry.PreviewText}  ({entry.LanguagePairLabel})",
+            };
+            item.Click += (_, _) => ViewModel.RestoreHistoryEntry(capturedId);
+            HistoryMenuFlyout.Items.Add(item);
+        }
+
+        HistoryMenuFlyout.Items.Add(new MenuFlyoutSeparator());
+        var clearItem = new MenuFlyoutItem
+        {
+            Text = "清空历史记录",
+        };
+        clearItem.Click += (_, _) => ViewModel.ClearHistory();
+        HistoryMenuFlyout.Items.Add(clearItem);
     }
 
     private void MarkInternalFlyoutOpened()
@@ -477,29 +512,66 @@ public sealed partial class TranslationPopupWindow : WindowEx
         }
     }
 
+    public static ScreenPoint ResolvePopupPosition(
+        IWindowHelperService windowHelperService,
+        WindowBehaviorConfig behaviorConfig,
+        ScreenPoint anchor,
+        int widthPx,
+        int heightPx,
+        int cursorOffsetPx,
+        bool centerOnScreen)
+    {
+        if (behaviorConfig.PositionMode == WindowPositionMode.RememberFixedPosition)
+        {
+            return ClampTopLeftToWorkArea(
+                windowHelperService,
+                new ScreenPoint(behaviorConfig.FixedX, behaviorConfig.FixedY),
+                widthPx,
+                heightPx);
+        }
+
+        if (centerOnScreen)
+        {
+            return windowHelperService.CalculateCenteredWindowPosition(
+                anchor,
+                widthPx,
+                heightPx);
+        }
+
+        return windowHelperService.CalculateClampedWindowPosition(
+            anchor,
+            widthPx,
+            heightPx,
+            cursorOffsetPx: cursorOffsetPx);
+    }
+
     private double CalculateDesiredHeightDips()
     {
         var maxHeightDips = Math.Clamp(_behaviorConfig.PopupMaxHeight, 300, 1000);
 
         var toolbarH = TopToolbarGrid.ActualHeight > 0 ? TopToolbarGrid.ActualHeight : 54;
-        var fallbackSourceH = ViewModel.IsSourceCardCollapsed ? 50 : 122;
-        var sourceH = SourceSectionPanel.ActualHeight > 0
+        var fallbackSourceH = (ViewModel.IsSourceCardCollapsed ? 50 : 122) + (ViewModel.HasOcrContext ? 42 : 0);
+        var sourceH = IsPopupVisible && SourceSectionPanel.ActualHeight > 0
             ? SourceSectionPanel.ActualHeight + 12
             : fallbackSourceH;
         var bannerH = StatusBannerBorder.Visibility == Visibility.Visible && StatusBannerBorder.ActualHeight > 0
             ? StatusBannerBorder.ActualHeight + 10
             : 0;
-        var cardsH = CardsContentPanel.ActualHeight > 0
-            ? CardsContentPanel.ActualHeight + 16
-            : 64;
+        var cardsH = ViewModel.ServiceCards.Count == 0 && !ViewModel.ShowNoEnabledProvidersHint && !ViewModel.HasPendingInputGuard
+            ? 64
+            : (CardsContentPanel.ActualHeight > 0 ? CardsContentPanel.ActualHeight + 16 : 64);
 
         var total = toolbarH + sourceH + bannerH + cardsH + 6;
         return Math.Clamp(total, MinPopupHeightDips, maxHeightDips);
     }
 
-    private ScreenPoint ClampTopLeftToWorkArea(ScreenPoint desired, int widthPx, int heightPx)
+    private static ScreenPoint ClampTopLeftToWorkArea(
+        IWindowHelperService windowHelperService,
+        ScreenPoint desired,
+        int widthPx,
+        int heightPx)
     {
-        var monitor = _windowHelperService.GetMonitorAtPoint(desired);
+        var monitor = windowHelperService.GetMonitorAtPoint(desired);
         var work = monitor.WorkArea;
         if (work.IsEmpty)
         {
@@ -558,7 +630,8 @@ public sealed partial class TranslationPopupWindow : WindowEx
                     return;
                 }
 
-                HidePopup();
+                // Preserve in-flight translations in background so accidental click-outside still lands in history cache.
+                HidePopup(cancelTranslations: false);
             });
         });
     }
@@ -657,8 +730,8 @@ public sealed partial class TranslationPopupWindow : WindowEx
             return;
         }
 
-        // Alt + P: Trigger Polish cards immediately if popup is already open
-        if (altDown && !ctrlDown && !shiftDown && e.Key == VirtualKey.P)
+        // Alt + Q (or legacy Alt + P): Trigger Polish cards immediately if popup is already open
+        if (altDown && !ctrlDown && !shiftDown && e.Key is VirtualKey.Q or VirtualKey.P)
         {
             _ = ViewModel.TriggerAllPolishCardsAsync();
             e.Handled = true;
@@ -674,6 +747,14 @@ public sealed partial class TranslationPopupWindow : WindowEx
                 e.Handled = true;
             }
 
+            return;
+        }
+
+        // Ctrl + H: Open Translation History menu
+        if (ctrlDown && !shiftDown && !altDown && e.Key == VirtualKey.H)
+        {
+            HistoryMenuFlyout.ShowAt(HistoryButton);
+            e.Handled = true;
             return;
         }
 
@@ -762,6 +843,11 @@ public sealed partial class TranslationPopupWindow : WindowEx
     private void NoProvidersSettingsButton_Click(object sender, RoutedEventArgs e)
     {
         SettingsRequested?.Invoke(this, "Providers");
+    }
+
+    private void GuardEditSourceButton_Click(object sender, RoutedEventArgs e)
+    {
+        FocusSourceInput();
     }
 
     private void TopToolbarGrid_PointerPressed(object sender, PointerRoutedEventArgs e)

@@ -18,6 +18,7 @@ public sealed partial class OcrSettingsViewModel : ObservableObject
     private readonly ISecretProtector _secretProtector;
     private readonly IOcrOrchestrator _ocrOrchestrator;
     private readonly IModelDiscoveryService _modelDiscoveryService;
+    private CancellationTokenSource? _autoSaveDebounceCts;
     private bool _isLoading;
     private bool _isDirty;
     private bool _suppressDiscoveredModelSync;
@@ -33,8 +34,16 @@ public sealed partial class OcrSettingsViewModel : ObservableObject
         _ocrOrchestrator = ocrOrchestrator;
         _modelDiscoveryService = modelDiscoveryService;
 
-        PreferredLanguageOptions.Add(new OcrLanguageOption(string.Empty, "自动（跟随 Windows 用户语言）"));
-        SelectedPreferredLanguage = PreferredLanguageOptions[0];
+        _isLoading = true;
+        try
+        {
+            PreferredLanguageOptions.Add(new OcrLanguageOption(string.Empty, "自动（跟随 Windows 用户语言）"));
+            SelectedPreferredLanguage = PreferredLanguageOptions[0];
+        }
+        finally
+        {
+            _isLoading = false;
+        }
     }
 
     public ObservableCollection<OcrLanguagePackInfo> InstalledLanguagePacks { get; } = [];
@@ -113,6 +122,7 @@ public sealed partial class OcrSettingsViewModel : ObservableObject
 
     public async Task LoadFromAsync(AppSettings settings)
     {
+        CancelAutoSaveDebounce();
         _isLoading = true;
         try
         {
@@ -148,6 +158,7 @@ public sealed partial class OcrSettingsViewModel : ObservableObject
 
     public async Task FlushIfDirtyAsync()
     {
+        CancelAutoSaveDebounce();
         if (!_isDirty || _isLoading)
         {
             return;
@@ -234,6 +245,9 @@ public sealed partial class OcrSettingsViewModel : ObservableObject
 
         try
         {
+            CancelAutoSaveDebounce();
+            await SaveOcrSettingsCoreAsync(successMessage: null);
+
             var models = await _modelDiscoveryService.FetchModelsAsync(baseUrl, VisionApiKeyPlaintext);
             _suppressDiscoveredModelSync = true;
             try
@@ -398,6 +412,49 @@ public sealed partial class OcrSettingsViewModel : ObservableObject
         if (!_isLoading)
         {
             _isDirty = true;
+            ScheduleAutoSave();
+        }
+    }
+
+    private void ScheduleAutoSave()
+    {
+        CancelAutoSaveDebounce();
+        var cts = new CancellationTokenSource();
+        _autoSaveDebounceCts = cts;
+        _ = PersistDebouncedAsync(cts.Token);
+    }
+
+    private async Task PersistDebouncedAsync(CancellationToken ct)
+    {
+        try
+        {
+            await Task.Delay(250, ct);
+            if (!ct.IsCancellationRequested && _isDirty)
+            {
+                await SaveOcrSettingsCoreAsync(successMessage: null);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Superseded by newer edit or immediate flush.
+        }
+    }
+
+    private void CancelAutoSaveDebounce()
+    {
+        if (_autoSaveDebounceCts is not null)
+        {
+            try
+            {
+                _autoSaveDebounceCts.Cancel();
+            }
+            catch
+            {
+                // Ignore cancellation race.
+            }
+
+            _autoSaveDebounceCts.Dispose();
+            _autoSaveDebounceCts = null;
         }
     }
 
@@ -418,6 +475,7 @@ public sealed partial class OcrSettingsViewModel : ObservableObject
 
     private async Task SaveOcrSettingsCoreAsync(string? successMessage)
     {
+        CancelAutoSaveDebounce();
         try
         {
             var updated = _settingsStore.Current.Clone();

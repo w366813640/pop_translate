@@ -12,6 +12,7 @@ public sealed partial class ProviderItemViewModel : ObservableObject
 {
     private readonly Action<ProviderItemViewModel> _enabledChangedCallback;
     private bool _suppressEnabledCallback;
+    private bool _hadInitialApiKey;
     private int _roleIndex;
     private int _triggerModeIndex;
     private int _defaultPolishStyleIndex;
@@ -23,6 +24,7 @@ public sealed partial class ProviderItemViewModel : ObservableObject
     {
         _enabledChangedCallback = enabledChangedCallback;
         _suppressEnabledCallback = true;
+        _hadInitialApiKey = !string.IsNullOrWhiteSpace(decryptedApiKey);
 
         Id = config.Id;
         Kind = config.Kind;
@@ -195,6 +197,99 @@ public sealed partial class ProviderItemViewModel : ObservableObject
     [ObservableProperty]
     public partial int FreeEngineIndex { get; set; }
 
+    public string OpenAiBaseUrl
+    {
+        get => IsOpenAi ? BaseUrl : string.Empty;
+        set
+        {
+            if (IsOpenAi && !string.Equals(BaseUrl, value, StringComparison.Ordinal))
+            {
+                BaseUrl = value;
+            }
+        }
+    }
+
+    public string DeepLBaseUrl
+    {
+        get => IsDeepL ? BaseUrl : string.Empty;
+        set
+        {
+            if (IsDeepL && !string.Equals(BaseUrl, value, StringComparison.Ordinal))
+            {
+                BaseUrl = value;
+            }
+        }
+    }
+
+    public string FreeMirrorBaseUrl
+    {
+        get => IsFreeTraditional ? BaseUrl : string.Empty;
+        set
+        {
+            if (IsFreeTraditional && !string.Equals(BaseUrl, value, StringComparison.Ordinal))
+            {
+                BaseUrl = value;
+            }
+        }
+    }
+
+    public string OpenAiApiKey
+    {
+        get => IsOpenAi ? ApiKeyPlaintext : string.Empty;
+        set
+        {
+            if (IsOpenAi && !string.Equals(ApiKeyPlaintext, value, StringComparison.Ordinal))
+            {
+                ApiKeyPlaintext = value;
+            }
+        }
+    }
+
+    public string DeepLApiKey
+    {
+        get => IsDeepL ? ApiKeyPlaintext : string.Empty;
+        set
+        {
+            if (IsDeepL && !string.Equals(ApiKeyPlaintext, value, StringComparison.Ordinal))
+            {
+                ApiKeyPlaintext = value;
+            }
+        }
+    }
+
+    partial void OnBaseUrlChanged(string value)
+    {
+        OnPropertyChanged(nameof(OpenAiBaseUrl));
+        OnPropertyChanged(nameof(DeepLBaseUrl));
+        OnPropertyChanged(nameof(FreeMirrorBaseUrl));
+    }
+
+    partial void OnApiKeyPlaintextChanged(string value)
+    {
+        OnPropertyChanged(nameof(OpenAiApiKey));
+        OnPropertyChanged(nameof(DeepLApiKey));
+
+        if (!_suppressEnabledCallback &&
+            !_hadInitialApiKey &&
+            (IsOpenAi || IsDeepL) &&
+            !string.IsNullOrWhiteSpace(value))
+        {
+            _hadInitialApiKey = true;
+            if (!Enabled)
+            {
+                _suppressEnabledCallback = true;
+                try
+                {
+                    Enabled = true;
+                }
+                finally
+                {
+                    _suppressEnabledCallback = false;
+                }
+            }
+        }
+    }
+
     partial void OnEnabledChanged(bool value)
     {
         if (!_suppressEnabledCallback)
@@ -292,6 +387,7 @@ public sealed partial class ProvidersSettingsViewModel : ObservableObject
     private readonly ISecretProtector _secretProtector;
     private readonly ITranslationOrchestrator _translationOrchestrator;
     private readonly IModelDiscoveryService _modelDiscoveryService;
+    private CancellationTokenSource? _autoSaveDebounceCts;
     private bool _isLoading;
     private bool _isDirty;
     private bool _suppressDiscoveredModelSync;
@@ -338,6 +434,9 @@ public sealed partial class ProvidersSettingsViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(FeedbackSeverity))]
     public partial bool IsFeedbackError { get; set; }
 
+    [ObservableProperty]
+    public partial string AutoSaveStatusText { get; set; } = "修改将自动加密保存";
+
     public bool HasSelectedProvider => SelectedProvider is not null;
 
     public bool HasNoSelectedProvider => SelectedProvider is null;
@@ -354,6 +453,7 @@ public sealed partial class ProvidersSettingsViewModel : ObservableObject
 
     public void LoadFrom(AppSettings settings)
     {
+        CancelAutoSaveDebounce();
         _isLoading = true;
         try
         {
@@ -380,6 +480,7 @@ public sealed partial class ProvidersSettingsViewModel : ObservableObject
                 ?? Providers.FirstOrDefault();
 
             _isDirty = false;
+            AutoSaveStatusText = "修改将自动加密保存";
             FeedbackMessage = null;
             IsFeedbackError = false;
         }
@@ -391,6 +492,7 @@ public sealed partial class ProvidersSettingsViewModel : ObservableObject
 
     public async Task FlushIfDirtyAsync()
     {
+        CancelAutoSaveDebounce();
         if (!_isDirty || _isLoading)
         {
             return;
@@ -666,6 +768,9 @@ public sealed partial class ProvidersSettingsViewModel : ObservableObject
 
         try
         {
+            CancelAutoSaveDebounce();
+            await SaveAllProvidersCoreAsync(successMessage: null);
+
             var models = await _modelDiscoveryService.FetchModelsAsync(baseUrl, provider.ApiKeyPlaintext);
 
             // Guard against user switching provider while request was in flight.
@@ -731,11 +836,8 @@ public sealed partial class ProvidersSettingsViewModel : ObservableObject
             return;
         }
 
-        var wasDirty = _isDirty;
-        if (wasDirty)
-        {
-            await SaveAllProvidersCoreAsync(successMessage: null);
-        }
+        CancelAutoSaveDebounce();
+        await SaveAllProvidersCoreAsync(successMessage: null);
 
         IsTestingConnection = true;
         IsFeedbackError = false;
@@ -748,8 +850,7 @@ public sealed partial class ProvidersSettingsViewModel : ObservableObject
             IsFeedbackError = !result.IsSuccess;
             if (result.IsSuccess)
             {
-                var savedNote = wasDirty ? "（配置已自动保存）" : string.Empty;
-                FeedbackMessage = $"连接成功{savedNote} ({Math.Round(result.Latency.TotalMilliseconds)} ms)：{result.Message}";
+                FeedbackMessage = $"连接成功（配置已自动保存，{Math.Round(result.Latency.TotalMilliseconds)} ms）：{result.Message}";
             }
             else
             {
@@ -774,12 +875,30 @@ public sealed partial class ProvidersSettingsViewModel : ObservableObject
             return;
         }
 
-        if (e.PropertyName is nameof(ProviderItemViewModel.SortOrder) or nameof(ProviderItemViewModel.Enabled))
+        if (e.PropertyName is
+            nameof(ProviderItemViewModel.SortOrder) or
+            nameof(ProviderItemViewModel.Enabled) or
+            nameof(ProviderItemViewModel.OpenAiBaseUrl) or
+            nameof(ProviderItemViewModel.DeepLBaseUrl) or
+            nameof(ProviderItemViewModel.FreeMirrorBaseUrl) or
+            nameof(ProviderItemViewModel.OpenAiApiKey) or
+            nameof(ProviderItemViewModel.DeepLApiKey) or
+            nameof(ProviderItemViewModel.IsPolishRole) or
+            nameof(ProviderItemViewModel.IsCustomPolishStyle) or
+            nameof(ProviderItemViewModel.BadgeText) or
+            nameof(ProviderItemViewModel.KindLabel) or
+            nameof(ProviderItemViewModel.ShowSystemPromptSection) or
+            nameof(ProviderItemViewModel.ShowPresetPolishPromptHint) or
+            nameof(ProviderItemViewModel.SystemPromptHeader) or
+            nameof(ProviderItemViewModel.SystemPromptPlaceholder) or
+            nameof(ProviderItemViewModel.SystemPromptHint))
         {
             return;
         }
 
         _isDirty = true;
+        AutoSaveStatusText = "正在自动保存...";
+        ScheduleAutoSave();
 
         if (e.PropertyName == nameof(ProviderItemViewModel.Model) &&
             !_suppressDiscoveredModelSync &&
@@ -797,6 +916,48 @@ public sealed partial class ProvidersSettingsViewModel : ObservableObject
             {
                 _suppressDiscoveredModelSync = false;
             }
+        }
+    }
+
+    private void ScheduleAutoSave()
+    {
+        CancelAutoSaveDebounce();
+        var cts = new CancellationTokenSource();
+        _autoSaveDebounceCts = cts;
+        _ = PersistDebouncedAsync(cts.Token);
+    }
+
+    private async Task PersistDebouncedAsync(CancellationToken ct)
+    {
+        try
+        {
+            await Task.Delay(250, ct);
+            if (!ct.IsCancellationRequested && _isDirty)
+            {
+                await SaveAllProvidersCoreAsync(successMessage: null);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Superseded by newer edit or immediate flush.
+        }
+    }
+
+    private void CancelAutoSaveDebounce()
+    {
+        if (_autoSaveDebounceCts is not null)
+        {
+            try
+            {
+                _autoSaveDebounceCts.Cancel();
+            }
+            catch
+            {
+                // Ignore cancellation race.
+            }
+
+            _autoSaveDebounceCts.Dispose();
+            _autoSaveDebounceCts = null;
         }
     }
 
@@ -835,8 +996,11 @@ public sealed partial class ProvidersSettingsViewModel : ObservableObject
             : $"已停用「{item.DisplayName}」。");
     }
 
-    private Task SaveAllProvidersAsync(string successMessage) =>
-        SaveAllProvidersCoreAsync(successMessage);
+    private Task SaveAllProvidersAsync(string successMessage)
+    {
+        CancelAutoSaveDebounce();
+        return SaveAllProvidersCoreAsync(successMessage);
+    }
 
     private async Task SaveAllProvidersCoreAsync(string? successMessage)
     {
@@ -853,6 +1017,7 @@ public sealed partial class ProvidersSettingsViewModel : ObservableObject
 
             await _settingsStore.SaveAsync(updated);
             _isDirty = false;
+            AutoSaveStatusText = $"✓ 已自动加密保存 ({DateTime.Now:HH:mm:ss})";
             if (!string.IsNullOrWhiteSpace(successMessage))
             {
                 IsFeedbackError = false;
@@ -861,6 +1026,7 @@ public sealed partial class ProvidersSettingsViewModel : ObservableObject
         }
         catch (Exception ex)
         {
+            AutoSaveStatusText = "自动保存失败";
             IsFeedbackError = true;
             FeedbackMessage = $"保存翻译服务失败：{ex.Message}";
         }

@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>PopTranslate</AssemblyName>
+    <RootNamespace>PopTranslate.Launcher</RootNamespace>
+    <ApplicationIcon>..\PopTranslate.App\Assets\poptranslate.ico</ApplicationIcon>
+    <ApplicationManifest>..\PopTranslate.App\app.manifest</ApplicationManifest>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+</Project>

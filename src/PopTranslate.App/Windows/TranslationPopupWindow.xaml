@@ -30,29 +30,38 @@
         <Grid
             x:Name="TopToolbarGrid"
             Grid.Row="0"
-            Padding="16,12,14,10"
+            Padding="14,12,10,10"
             Background="Transparent"
-            ColumnSpacing="8"
+            ColumnSpacing="6"
             PointerPressed="TopToolbarGrid_PointerPressed"
             PointerMoved="TopToolbarGrid_PointerMoved"
             PointerReleased="TopToolbarGrid_PointerReleased"
             PointerCaptureLost="TopToolbarGrid_PointerCaptureLost">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
 
-            <!-- Left: Clean Fluent 2 Language Pill Group (Zero Bulky ComboBox Chrome) -->
-            <StackPanel
+            <!-- Left: Responsive Clean Fluent 2 Language Pill Group (Zero Clipping) -->
+            <Grid
                 Grid.Column="0"
-                Orientation="Horizontal"
+                HorizontalAlignment="Left"
                 Height="32"
-                Spacing="6"
+                ColumnSpacing="3"
                 VerticalAlignment="Center">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
                 <Button
                     x:Name="SourceLangButton"
+                    Grid.Column="0"
                     Style="{StaticResource PopTranslateLanguagePillButtonStyle}"
+                    Padding="8,0,7,0"
+                    HorizontalAlignment="Left"
+                    HorizontalContentAlignment="Stretch"
                     AutomationProperties.Name="源语言"
                     ToolTipService.ToolTip="选择源语言">
                     <Button.Flyout>
@@ -63,22 +72,33 @@
                             Opening="SourceLangMenuFlyout_Opening"
                             Closed="InternalFlyout_Closed" />
                     </Button.Flyout>
-                    <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
+                    <Grid ColumnSpacing="4" VerticalAlignment="Center">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
                         <TextBlock
+                            Grid.Column="0"
                             FontSize="12.5"
+                            MaxWidth="112"
+                            TextTrimming="CharacterEllipsis"
                             VerticalAlignment="Center"
                             Foreground="{ThemeResource TextFillColorPrimaryBrush}"
                             Text="{x:Bind ViewModel.SourceLanguageButtonText, Mode=OneWay}" />
                         <FontIcon
+                            Grid.Column="1"
                             FontSize="9"
                             Glyph="&#xE70D;"
                             VerticalAlignment="Center"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                    </StackPanel>
+                    </Grid>
                 </Button>
 
                 <Button
+                    Grid.Column="1"
                     Style="{StaticResource PopTranslateMicroIconButtonStyle}"
+                    Width="24"
+                    Height="28"
                     Command="{x:Bind ViewModel.SwapLanguagesCommand}"
                     AutomationProperties.Name="互换源语言与目标语言"
                     ToolTipService.ToolTip="互换源语言与目标语言 (Alt+S)">
@@ -90,7 +110,11 @@
 
                 <Button
                     x:Name="TargetLangButton"
+                    Grid.Column="2"
                     Style="{StaticResource PopTranslateLanguagePillButtonStyle}"
+                    Padding="8,0,7,0"
+                    HorizontalAlignment="Left"
+                    HorizontalContentAlignment="Stretch"
                     AutomationProperties.Name="目标语言"
                     ToolTipService.ToolTip="选择目标语言">
                     <Button.Flyout>
@@ -101,38 +125,46 @@
                             Opening="TargetLangMenuFlyout_Opening"
                             Closed="InternalFlyout_Closed" />
                     </Button.Flyout>
-                    <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
+                    <Grid ColumnSpacing="4" VerticalAlignment="Center">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
                         <TextBlock
+                            Grid.Column="0"
                             FontSize="12.5"
                             FontWeight="SemiBold"
+                            MaxWidth="112"
+                            TextTrimming="CharacterEllipsis"
                             VerticalAlignment="Center"
                             Foreground="{ThemeResource TextFillColorPrimaryBrush}"
                             Text="{x:Bind ViewModel.TargetLanguageButtonText, Mode=OneWay}" />
                         <FontIcon
+                            Grid.Column="1"
                             FontSize="9"
                             Glyph="&#xE70D;"
                             VerticalAlignment="Center"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                    </StackPanel>
+                    </Grid>
                 </Button>
-            </StackPanel>
+            </Grid>
 
-            <!-- Column 1 (*): Draggable Empty Header Space -->
-
-            <!-- Right: 32x32 (CornerRadius=6) Ghost Window Micro-Toolbar (Zero Solid ToggleButtons!) -->
+            <!-- Right: Compact 28x28 (CornerRadius=6) Ghost Window Micro-Toolbar (Zero Solid ToggleButtons!) -->
             <StackPanel
-                Grid.Column="2"
+                Grid.Column="1"
                 Orientation="Horizontal"
-                Spacing="4"
+                Spacing="2"
                 VerticalAlignment="Center">
 
                 <!-- ↵ Merge Line Breaks Subtle Tinted Ghost Button -->
                 <Button
                     Style="{StaticResource PopTranslateHeaderGhostButtonStyle}"
+                    Width="28"
+                    Height="28"
                     Command="{x:Bind ViewModel.ToggleMergeLineBreaksCommand}"
                     AutomationProperties.Name="智能合并换行"
                     ToolTipService.ToolTip="{x:Bind ViewModel.MergeLineBreaksTooltip, Mode=OneWay}">
-                    <Grid Width="32" Height="32">
+                    <Grid Width="28" Height="28">
                         <Border
                             Visibility="{x:Bind ViewModel.MergeLineBreaks, Mode=OneWay}"
                             Background="{ThemeResource PopTranslateAccentSubtleBackgroundBrush}"
@@ -140,7 +172,7 @@
                             BorderThickness="1"
                             CornerRadius="6">
                             <FontIcon
-                                FontSize="13"
+                                FontSize="12.5"
                                 Glyph="&#xE751;"
                                 HorizontalAlignment="Center"
                                 VerticalAlignment="Center"
@@ -150,7 +182,7 @@
                             Visibility="{x:Bind ViewModel.IsMergeLineBreaksOff, Mode=OneWay}"
                             CornerRadius="6">
                             <FontIcon
-                                FontSize="13"
+                                FontSize="12.5"
                                 Glyph="&#xE751;"
                                 HorizontalAlignment="Center"
                                 VerticalAlignment="Center"
@@ -162,10 +194,12 @@
                 <!-- 📌 Pin Subtle Tinted Ghost Button -->
                 <Button
                     Style="{StaticResource PopTranslateHeaderGhostButtonStyle}"
+                    Width="28"
+                    Height="28"
                     Command="{x:Bind ViewModel.TogglePinCommand}"
                     AutomationProperties.Name="置顶锁定弹窗"
                     ToolTipService.ToolTip="{x:Bind ViewModel.PinTooltip, Mode=OneWay}">
-                    <Grid Width="32" Height="32">
+                    <Grid Width="28" Height="28">
                         <Border
                             Visibility="{x:Bind ViewModel.IsPinned, Mode=OneWay}"
                             Background="{ThemeResource PopTranslateAccentSubtleBackgroundBrush}"
@@ -173,7 +207,7 @@
                             BorderThickness="1"
                             CornerRadius="6">
                             <FontIcon
-                                FontSize="13"
+                                FontSize="12.5"
                                 Glyph="&#xE840;"
                                 HorizontalAlignment="Center"
                                 VerticalAlignment="Center"
@@ -183,7 +217,7 @@
                             Visibility="{x:Bind ViewModel.IsUnpinned, Mode=OneWay}"
                             CornerRadius="6">
                             <FontIcon
-                                FontSize="13"
+                                FontSize="12.5"
                                 Glyph="&#xE718;"
                                 HorizontalAlignment="Center"
                                 VerticalAlignment="Center"
@@ -192,14 +226,40 @@
                     </Grid>
                 </Button>
 
+                <!-- 🕒 History Menu -->
+                <Button
+                    x:Name="HistoryButton"
+                    Style="{StaticResource PopTranslateHeaderGhostButtonStyle}"
+                    Width="28"
+                    Height="28"
+                    AutomationProperties.Name="翻译历史记录"
+                    ToolTipService.ToolTip="最近翻译历史 (Ctrl+H)">
+                    <Button.Flyout>
+                        <MenuFlyout
+                            x:Name="HistoryMenuFlyout"
+                            Placement="BottomEdgeAlignedRight"
+                            ShouldConstrainToRootBounds="False"
+                            Opening="HistoryMenuFlyout_Opening"
+                            Closed="InternalFlyout_Closed" />
+                    </Button.Flyout>
+                    <FontIcon
+                        FontSize="12.5"
+                        Glyph="&#xE81C;"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                </Button>
+
                 <!-- 📷 Screenshot -->
                 <Button
                     Style="{StaticResource PopTranslateHeaderGhostButtonStyle}"
+                    Width="28"
+                    Height="28"
                     Click="ScreenshotButton_Click"
                     AutomationProperties.Name="截图翻译"
                     ToolTipService.ToolTip="截图翻译">
                     <FontIcon
-                        FontSize="13"
+                        FontSize="12.5"
                         Glyph="&#xE722;"
                         HorizontalAlignment="Center"
                         VerticalAlignment="Center"
@@ -209,11 +269,13 @@
                 <!-- ⚙ Settings -->
                 <Button
                     Style="{StaticResource PopTranslateHeaderGhostButtonStyle}"
+                    Width="28"
+                    Height="28"
                     Click="SettingsButton_Click"
                     AutomationProperties.Name="打开设置"
                     ToolTipService.ToolTip="打开设置">
                     <FontIcon
-                        FontSize="13"
+                        FontSize="12.5"
                         Glyph="&#xE713;"
                         HorizontalAlignment="Center"
                         VerticalAlignment="Center"
@@ -224,6 +286,8 @@
                 <Button
                     x:Name="ClosePopupButton"
                     Style="{StaticResource PopTranslateHeaderGhostButtonStyle}"
+                    Width="28"
+                    Height="28"
                     Click="ClosePopupButton_Click"
                     AutomationProperties.Name="关闭弹窗"
                     ToolTipService.ToolTip="关闭弹窗 (Esc)">
@@ -416,7 +480,8 @@
                             BorderThickness="0"
                             Background="Transparent"
                             Padding="14,10,14,6"
-                            ScrollViewer.VerticalScrollBarVisibility="Auto"
+                            ScrollViewer.VerticalScrollMode="Auto"
+                            ScrollViewer.VerticalScrollBarVisibility="Hidden"
                             GotFocus="SourceTextBox_GotFocus"
                             LostFocus="SourceTextBox_LostFocus"
                             PreviewKeyDown="SourceTextBox_PreviewKeyDown">
@@ -563,7 +628,9 @@
             x:Name="CardsScrollViewer"
             Grid.Row="3"
             Padding="16,0,16,16"
-            VerticalScrollBarVisibility="Auto"
+            VerticalScrollMode="Auto"
+            VerticalScrollBarVisibility="Hidden"
+            HorizontalScrollMode="Disabled"
             HorizontalScrollBarVisibility="Disabled">
             <StackPanel
                 x:Name="CardsContentPanel"
@@ -581,6 +648,134 @@
                         </DataTemplate>
                     </ItemsRepeater.ItemTemplate>
                 </ItemsRepeater>
+
+                <!-- Smart Input / Long-Text Token Guard Action Card (Zero Token Until Confirmed) -->
+                <Border
+                    x:Name="InputGuardCardBorder"
+                    Visibility="{x:Bind ViewModel.HasPendingInputGuard, Mode=OneWay}"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource PopTranslateAccentSubtleBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="14,12">
+                    <StackPanel Spacing="10">
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+
+                            <Border
+                                Grid.Column="0"
+                                Width="24"
+                                Height="24"
+                                CornerRadius="6"
+                                VerticalAlignment="Top"
+                                Background="{ThemeResource PopTranslateAccentSubtleBackgroundBrush}">
+                                <FontIcon
+                                    FontSize="12.5"
+                                    Glyph="&#xE946;"
+                                    HorizontalAlignment="Center"
+                                    VerticalAlignment="Center"
+                                    Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                            </Border>
+
+                            <StackPanel Grid.Column="1" Spacing="3">
+                                <TextBlock
+                                    FontSize="13"
+                                    FontWeight="SemiBold"
+                                    Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                                    TextWrapping="Wrap"
+                                    Text="{x:Bind ViewModel.PendingGuardTitle, Mode=OneWay}" />
+                                <TextBlock
+                                    FontSize="12"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    TextWrapping="Wrap"
+                                    Text="{x:Bind ViewModel.PendingGuardDescription, Mode=OneWay}" />
+                            </StackPanel>
+                        </Grid>
+
+                        <StackPanel
+                            Orientation="Horizontal"
+                            Spacing="8"
+                            HorizontalAlignment="Right">
+                            <Button
+                                Visibility="{x:Bind ViewModel.ShowGuardEditSourceAction, Mode=OneWay}"
+                                Style="{StaticResource PopTranslateContextualLinkButtonStyle}"
+                                Height="28"
+                                Padding="8,0"
+                                Click="GuardEditSourceButton_Click"
+                                AutomationProperties.Name="展开编辑原文"
+                                ToolTipService.ToolTip="展开原文输入框删减后再翻译">
+                                <TextBlock
+                                    FontSize="12"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Text="编辑原文" />
+                            </Button>
+
+                            <Button
+                                Visibility="{x:Bind ViewModel.ShowGuardCopyOriginalAction, Mode=OneWay}"
+                                Style="{StaticResource PopTranslateContextualLinkButtonStyle}"
+                                Height="28"
+                                Padding="8,0"
+                                Command="{x:Bind ViewModel.CopyGuardedSourceCommand}"
+                                AutomationProperties.Name="复制原样"
+                                ToolTipService.ToolTip="复制原始文本到剪贴板">
+                                <TextBlock
+                                    FontSize="12"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Text="复制原样" />
+                            </Button>
+
+                            <Button
+                                Visibility="{x:Bind ViewModel.ShowGuardExplainAction, Mode=OneWay}"
+                                Height="28"
+                                Padding="0"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                CornerRadius="6"
+                                Command="{x:Bind ViewModel.ExplainPendingGuardWithAiCommand}"
+                                AutomationProperties.Name="使用 AI 解释技术内容"
+                                ToolTipService.ToolTip="调用大模型解释代码、结构化数据或报错原因">
+                                <Border
+                                    Background="{ThemeResource PopTranslatePolishSubtleBackgroundBrush}"
+                                    BorderBrush="{ThemeResource PopTranslatePolishSubtleBorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="6"
+                                    Padding="10,4">
+                                    <TextBlock
+                                        FontSize="12"
+                                        FontWeight="SemiBold"
+                                        Foreground="{ThemeResource PopTranslatePolishAccentForegroundBrush}"
+                                        Text="{x:Bind ViewModel.PendingGuardExplainActionText, Mode=OneWay}" />
+                                </Border>
+                            </Button>
+
+                            <Button
+                                Height="28"
+                                Padding="0"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                CornerRadius="6"
+                                Command="{x:Bind ViewModel.ConfirmPendingGuardCommand}"
+                                AutomationProperties.Name="确认继续翻译"
+                                ToolTipService.ToolTip="忽略拦截并立即执行翻译">
+                                <Border
+                                    Background="{ThemeResource PopTranslateAccentSubtleBackgroundBrush}"
+                                    BorderBrush="{ThemeResource PopTranslateAccentSubtleBorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="6"
+                                    Padding="10,4">
+                                    <TextBlock
+                                        FontSize="12"
+                                        FontWeight="SemiBold"
+                                        Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                                        Text="{x:Bind ViewModel.PendingGuardPrimaryActionText, Mode=OneWay}" />
+                                </Border>
+                            </Button>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
 
                 <!-- No Enabled Providers Hint -->
                 <Border
@@ -632,6 +827,38 @@
                     HorizontalAlignment="Center"
                     Margin="0,8,0,4"
                     Text="{x:Bind ViewModel.EmptyHintText, Mode=OneWay}" />
+
+                <!-- Quick Restore Last Translation Pill (Zero API Re-upload) -->
+                <Button
+                    Visibility="{x:Bind ViewModel.ShowRestoreLastHistoryHint, Mode=OneWay}"
+                    HorizontalAlignment="Center"
+                    Padding="0"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    CornerRadius="6"
+                    Command="{x:Bind ViewModel.RestoreLastHistoryCommand}"
+                    AutomationProperties.Name="恢复上次翻译结果"
+                    ToolTipService.ToolTip="直接恢复上一次翻译缓存，无需重新请求 (Ctrl+H)">
+                    <Border
+                        Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="6"
+                        Padding="10,4">
+                        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                            <FontIcon
+                                FontSize="11"
+                                Glyph="&#xE81C;"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            <TextBlock
+                                FontSize="11.5"
+                                MaxWidth="320"
+                                TextTrimming="CharacterEllipsis"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Text="{x:Bind ViewModel.RestoreLastHistoryLabel, Mode=OneWay}" />
+                        </StackPanel>
+                    </Border>
+                </Button>
             </StackPanel>
         </ScrollViewer>
     </Grid>

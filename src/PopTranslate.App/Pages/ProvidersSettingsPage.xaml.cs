@@ -54,4 +54,24 @@ public sealed partial class ProvidersSettingsPage : Page
             ViewModel.DeleteSelectedProviderCommand.Execute(null);
         }
     }
+
+    private void OpenAiApiKeyBox_PasswordChanged(object sender, RoutedEventArgs e)
+    {
+        if (sender is PasswordBox { IsLoaded: true } box &&
+            ViewModel?.SelectedProvider is { IsOpenAi: true } provider &&
+            !string.Equals(provider.OpenAiApiKey, box.Password, StringComparison.Ordinal))
+        {
+            provider.OpenAiApiKey = box.Password;
+        }
+    }
+
+    private void DeepLApiKeyBox_PasswordChanged(object sender, RoutedEventArgs e)
+    {
+        if (sender is PasswordBox { IsLoaded: true } box &&
+            ViewModel?.SelectedProvider is { IsDeepL: true } provider &&
+            !string.Equals(provider.DeepLApiKey, box.Password, StringComparison.Ordinal))
+        {
+            provider.DeepLApiKey = box.Password;
+        }
+    }
 }

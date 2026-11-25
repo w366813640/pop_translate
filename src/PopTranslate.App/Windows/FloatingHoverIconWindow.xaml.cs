@@ -1,18 +1,26 @@
 using PopTranslate.App.Services;
 using PopTranslate.Core.Contracts;
 using PopTranslate.Core.Models;
+using Microsoft.UI.Input;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Windows.System;
-using WinUIEx;
+using WinRT.Interop;
 
 namespace PopTranslate.App.Windows;
 
-public sealed partial class FloatingHoverIconWindow : WindowEx
+public sealed partial class FloatingHoverIconWindow : Window
 {
-    private const double IconSizeDips = 34;
+    public const double IconWidthDips = 32;
+    public const double IconHeightDips = 32;
+    private const int MenuCommandReplaceTranslate = 10;
+    private const int MenuCommandBlacklistProcess = 1;
+    private const int MenuCommandMuteHover30Min = 2;
+    private const int MenuCommandDisableHoverIcon = 3;
+    private const int MenuCommandOpenSettings = 4;
+    private const int MenuCommandExitApp = 5;
 
     private readonly IWindowHelperService _windowHelperService;
     private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _autoHideTimer;
@@ -20,6 +28,7 @@ public sealed partial class FloatingHoverIconWindow : WindowEx
     private string? _sourceProcessName;
     private bool _isPointerHovering;
     private bool _isContextMenuOpen;
+    private long _lastContextMenuClosedTick;
     private bool _isVisible;
 
     public FloatingHoverIconWindow(IWindowHelperService windowHelperService)
@@ -28,10 +37,17 @@ public sealed partial class FloatingHoverIconWindow : WindowEx
         InitializeComponent();
 
         SystemBackdrop = new DesktopAcrylicBackdrop();
-        AppAssetHelper.TryApplyWindowIcon(this);
+        TryApplyNativeIcon();
 
-        _hwnd = this.GetWindowHandle();
+        _hwnd = WindowNative.GetWindowHandle(this);
         ConfigureWindowChrome();
+
+        // Single unified right-button release listener (even when inner Button marks pointer events handled)
+        // to avoid duplicate RightTapped + PointerReleased double-popups.
+        RootGrid.AddHandler(
+            UIElement.PointerReleasedEvent,
+            new PointerEventHandler(RootGrid_PointerReleased),
+            handledEventsToo: true);
 
         _autoHideTimer = DispatcherQueue.CreateTimer();
         _autoHideTimer.IsRepeating = false;
@@ -57,19 +73,56 @@ public sealed partial class FloatingHoverIconWindow : WindowEx
 
     public event EventHandler? IconClicked;
     public event EventHandler? TranslateClicked;
+    public event EventHandler? ReplaceTranslateClicked;
     public event EventHandler<string>? BlacklistProcessRequested;
     public event EventHandler<TimeSpan>? MuteHoverRequested;
     public event EventHandler? DisableHoverIconRequested;
+    public event EventHandler? SettingsRequested;
+    public event EventHandler? ExitRequested;
+    public new event EventHandler<bool>? VisibilityChanged;
 
     public bool AllowClose { get; set; }
 
     public nint WindowHandle => _hwnd;
+
+    public bool IsIconVisible => _isVisible && AppWindow.IsVisible;
+
+    public static IReadOnlyList<NativeContextMenuItem> BuildContextMenuItems(string? sourceProcessName)
+    {
+        var normalized = NormalizeProcessDisplayName(sourceProcessName);
+        var blacklistItem = !string.IsNullOrWhiteSpace(normalized)
+            ? new NativeContextMenuItem(MenuCommandBlacklistProcess, $"屏蔽当前应用 ({normalized})", IsEnabled: true)
+            : new NativeContextMenuItem(MenuCommandBlacklistProcess, "屏蔽当前应用", IsEnabled: false);
+
+        return
+        [
+            new NativeContextMenuItem(MenuCommandReplaceTranslate, "替换翻译选中文本", IsEnabled: true),
+            new NativeContextMenuItem(0, IsSeparator: true),
+            blacklistItem,
+            new NativeContextMenuItem(MenuCommandMuteHover30Min, "暂停划词 30 分钟", IsEnabled: true),
+            new NativeContextMenuItem(MenuCommandDisableHoverIcon, "关闭划词悬浮图标", IsEnabled: true),
+            new NativeContextMenuItem(0, IsSeparator: true),
+            new NativeContextMenuItem(MenuCommandOpenSettings, "打开设置...", IsEnabled: true),
+            new NativeContextMenuItem(MenuCommandExitApp, "退出程序", IsEnabled: true),
+        ];
+    }
+
+    public static (int WidthPx, int HeightPx) CalculatePhysicalSize(double dpiScale)
+    {
+        var safeScale = dpiScale > 0 ? dpiScale : 1.0;
+        var widthPx = Math.Max(24, (int)Math.Ceiling(IconWidthDips * safeScale));
+        var heightPx = Math.Max(24, (int)Math.Ceiling(IconHeightDips * safeScale));
+        return (widthPx, heightPx);
+    }
 
     public void ApplyTheme(AppThemeMode mode) => AppAssetHelper.ApplyTheme(this, mode);
 
     public void PreWarm()
     {
         ConfigureWindowChrome();
+        var scale = _windowHelperService.GetDpiScaleForWindow(_hwnd);
+        var (widthPx, heightPx) = CalculatePhysicalSize(scale);
+        _windowHelperService.MoveAndResizeWindow(_hwnd, 0, 0, widthPx, heightPx, activate: false);
         AppWindow.Hide();
         _isVisible = false;
     }
@@ -77,14 +130,12 @@ public sealed partial class FloatingHoverIconWindow : WindowEx
     public void ShowAt(ScreenPoint anchorPoint, int autoDismissMs, string? sourceProcessName = null)
     {
         _sourceProcessName = NormalizeProcessDisplayName(sourceProcessName);
-        UpdateContextMenuProcessItem();
 
         var monitor = _windowHelperService.GetMonitorAtPoint(anchorPoint);
         var scale = monitor.DpiScale > 0 ? monitor.DpiScale : 1.0;
 
-        var widthPx = Math.Max(28, (int)Math.Ceiling(IconSizeDips * scale));
-        var heightPx = Math.Max(28, (int)Math.Ceiling(IconSizeDips * scale));
-        var cursorOffsetPx = Math.Max(8, (int)Math.Round(14 * scale));
+        var (widthPx, heightPx) = CalculatePhysicalSize(scale);
+        var cursorOffsetPx = Math.Max(8, (int)Math.Round(12 * scale));
 
         var pos = _windowHelperService.CalculateClampedWindowPosition(
             anchorPoint,
@@ -97,6 +148,7 @@ public sealed partial class FloatingHoverIconWindow : WindowEx
         _windowHelperService.ShowWindowNoActivate(_hwnd);
 
         _isVisible = true;
+        VisibilityChanged?.Invoke(this, true);
         RestartAutoHideTimer(autoDismissMs);
     }
 
@@ -105,10 +157,6 @@ public sealed partial class FloatingHoverIconWindow : WindowEx
         _autoHideTimer.Stop();
         _isPointerHovering = false;
         _isContextMenuOpen = false;
-        if (HoverContextFlyout.IsOpen)
-        {
-            HoverContextFlyout.Hide();
-        }
 
         if (!_isVisible && !AppWindow.IsVisible)
         {
@@ -117,22 +165,7 @@ public sealed partial class FloatingHoverIconWindow : WindowEx
 
         _isVisible = false;
         AppWindow.Hide();
-    }
-
-    private void UpdateContextMenuProcessItem()
-    {
-        if (!string.IsNullOrWhiteSpace(_sourceProcessName))
-        {
-            BlacklistCurrentAppMenuItem.Text = $"屏蔽当前应用 ({_sourceProcessName})";
-            BlacklistCurrentAppMenuItem.IsEnabled = true;
-            BlacklistCurrentAppMenuItem.Visibility = Visibility.Visible;
-        }
-        else
-        {
-            BlacklistCurrentAppMenuItem.Text = "屏蔽当前应用";
-            BlacklistCurrentAppMenuItem.IsEnabled = false;
-            BlacklistCurrentAppMenuItem.Visibility = Visibility.Collapsed;
-        }
+        VisibilityChanged?.Invoke(this, false);
     }
 
     private static string? NormalizeProcessDisplayName(string? processName)
@@ -153,27 +186,39 @@ public sealed partial class FloatingHoverIconWindow : WindowEx
             : $"{trimmed}.exe";
     }
 
+    private void TryApplyNativeIcon()
+    {
+        try
+        {
+            var iconPath = AppAssetHelper.IconPath;
+            if (File.Exists(iconPath))
+            {
+                AppWindow.SetIcon(iconPath);
+            }
+        }
+        catch
+        {
+            // Never fail hover icon creation if icon loading is unavailable.
+        }
+    }
+
     private void ConfigureWindowChrome()
     {
         try
         {
-            IsShownInSwitchers = false;
+            AppWindow.IsShownInSwitchers = false;
         }
         catch
         {
             // Ignore Shell_TrayWnd / ITaskbarList unavailability.
         }
 
-        IsAlwaysOnTop = true;
-
-        if (AppWindow.Presenter is OverlappedPresenter presenter)
-        {
-            presenter.IsResizable = false;
-            presenter.IsMaximizable = false;
-            presenter.IsMinimizable = false;
-            presenter.IsAlwaysOnTop = true;
-            presenter.SetBorderAndTitleBar(hasBorder: true, hasTitleBar: false);
-        }
+        var presenter = OverlappedPresenter.CreateForContextMenu();
+        presenter.IsResizable = false;
+        presenter.IsMaximizable = false;
+        presenter.IsMinimizable = false;
+        presenter.IsAlwaysOnTop = true;
+        AppWindow.SetPresenter(presenter);
 
         _windowHelperService.ConfigureNoActivateOverlayWindow(_hwnd);
     }
@@ -193,40 +238,82 @@ public sealed partial class FloatingHoverIconWindow : WindowEx
         IconClicked?.Invoke(this, EventArgs.Empty);
     }
 
-    private void BlacklistCurrentAppMenuItem_Click(object sender, RoutedEventArgs e)
+    private void RootGrid_PointerReleased(object sender, PointerRoutedEventArgs e)
     {
-        var processName = _sourceProcessName;
-        HideIcon();
-        if (!string.IsNullOrWhiteSpace(processName))
+        var point = e.GetCurrentPoint(null);
+        if (point.Properties.PointerUpdateKind == PointerUpdateKind.RightButtonReleased)
         {
-            BlacklistProcessRequested?.Invoke(this, processName);
+            e.Handled = true;
+            ShowNativeHoverContextMenu();
         }
     }
 
-    private void MuteHover30MinMenuItem_Click(object sender, RoutedEventArgs e)
+    private void ShowNativeHoverContextMenu()
     {
-        HideIcon();
-        MuteHoverRequested?.Invoke(this, TimeSpan.FromMinutes(30));
-    }
+        if (_isContextMenuOpen || Environment.TickCount64 - _lastContextMenuClosedTick < 250)
+        {
+            return;
+        }
 
-    private void DisableHoverIconMenuItem_Click(object sender, RoutedEventArgs e)
-    {
-        HideIcon();
-        DisableHoverIconRequested?.Invoke(this, EventArgs.Empty);
-    }
-
-    private void HoverContextFlyout_Opening(object? sender, object e)
-    {
         _isContextMenuOpen = true;
         _autoHideTimer.Stop();
-    }
 
-    private void HoverContextFlyout_Closed(object? sender, object e)
-    {
-        _isContextMenuOpen = false;
-        if (_isVisible && !_isPointerHovering)
+        var processSnapshot = _sourceProcessName;
+        var items = BuildContextMenuItems(processSnapshot);
+        var cursorPos = _windowHelperService.GetCursorPosition();
+
+        int selectedCommand;
+        try
         {
-            RestartAutoHideTimer(1800);
+            selectedCommand = _windowHelperService.ShowNativeContextMenu(_hwnd, cursorPos, items);
+        }
+        finally
+        {
+            _lastContextMenuClosedTick = Environment.TickCount64;
+            _isContextMenuOpen = false;
+        }
+
+        switch (selectedCommand)
+        {
+            case MenuCommandReplaceTranslate:
+                HideIcon();
+                DispatcherQueue.TryEnqueue(() => ReplaceTranslateClicked?.Invoke(this, EventArgs.Empty));
+                break;
+
+            case MenuCommandBlacklistProcess:
+                HideIcon();
+                if (!string.IsNullOrWhiteSpace(processSnapshot))
+                {
+                    DispatcherQueue.TryEnqueue(() => BlacklistProcessRequested?.Invoke(this, processSnapshot));
+                }
+                break;
+
+            case MenuCommandMuteHover30Min:
+                HideIcon();
+                DispatcherQueue.TryEnqueue(() => MuteHoverRequested?.Invoke(this, TimeSpan.FromMinutes(30)));
+                break;
+
+            case MenuCommandDisableHoverIcon:
+                HideIcon();
+                DispatcherQueue.TryEnqueue(() => DisableHoverIconRequested?.Invoke(this, EventArgs.Empty));
+                break;
+
+            case MenuCommandOpenSettings:
+                HideIcon();
+                DispatcherQueue.TryEnqueue(() => SettingsRequested?.Invoke(this, EventArgs.Empty));
+                break;
+
+            case MenuCommandExitApp:
+                HideIcon();
+                DispatcherQueue.TryEnqueue(() => ExitRequested?.Invoke(this, EventArgs.Empty));
+                break;
+
+            default:
+                if (_isVisible && !_isPointerHovering)
+                {
+                    RestartAutoHideTimer(1800);
+                }
+                break;
         }
     }
 

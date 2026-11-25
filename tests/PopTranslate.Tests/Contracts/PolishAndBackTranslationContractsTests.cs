@@ -15,14 +15,14 @@ public sealed class PolishAndBackTranslationContractsTests
     };
 
     [Fact]
-    public void HotkeyAction_SelectionPolish_HasExpectedValueAndDefaultAltPGesture()
+    public void HotkeyAction_SelectionPolish_HasExpectedValueAndDefaultAltQGesture()
     {
         Assert.Equal(3, (int)HotkeyAction.SelectionPolish);
 
         var config = new HotkeyConfig();
         Assert.Equal(HotkeyModifiers.Alt, config.SelectionPolish.Modifiers);
-        Assert.Equal(0x50u, config.SelectionPolish.VirtualKey);
-        Assert.Equal("Alt + P", config.SelectionPolish.DisplayText);
+        Assert.Equal(0x51u, config.SelectionPolish.VirtualKey);
+        Assert.Equal("Alt + Q", config.SelectionPolish.DisplayText);
         Assert.Equal(HotkeyConfig.DefaultSelectionPolish, config.SelectionPolish);
     }
 
@@ -38,12 +38,12 @@ public sealed class PolishAndBackTranslationContractsTests
         var cloned = config.Clone();
         Assert.Equal(custom, cloned.SelectionPolish);
 
-        // Explicitly disabled (Empty) gesture must stay Empty rather than reverting to Alt+P.
+        // Explicitly disabled (Empty) gesture must stay Empty rather than reverting to Alt+Q.
         config.SelectionPolish = HotkeyGesture.Empty;
         var emptyCloned = config.Clone();
         Assert.True(emptyCloned.SelectionPolish.IsEmpty);
 
-        // Null gesture (e.g., hand-edited JSON) recovers safely to default Alt+P.
+        // Null gesture (e.g., hand-edited JSON) recovers safely to default Alt+Q.
         config.SelectionPolish = null!;
         var recovered = config.Clone();
         Assert.Equal(HotkeyConfig.DefaultSelectionPolish, recovered.SelectionPolish);
@@ -105,7 +105,7 @@ public sealed class PolishAndBackTranslationContractsTests
         Assert.Equal(PolishStyle.General, defaults.Polish.DefaultStyle);
         Assert.False(defaults.Polish.ShowDiffByDefault);
         Assert.Equal(PolishConfig.DefaultCustomPrompt, defaults.Polish.CustomPrompt);
-        Assert.Equal("Alt + P", defaults.Hotkeys.SelectionPolish.DisplayText);
+        Assert.Equal("Alt + Q", defaults.Hotkeys.SelectionPolish.DisplayText);
 
         defaults.AutoBackTranslate = true;
         defaults.Polish.DefaultStyle = PolishStyle.Concise;
@@ -170,12 +170,12 @@ public sealed class PolishAndBackTranslationContractsTests
         var restored = JsonSerializer.Deserialize<AppSettings>(legacyV1Json, StoreCompatibleJsonOptions);
         Assert.NotNull(restored);
 
-        // Existing V1 values preserved.
+        // Existing V1 values preserved (and obsolete InputTranslate field in old JSON ignored gracefully).
         Assert.Equal(LanguageCode.ChineseSimplified, restored.PrimaryTargetLanguage);
         Assert.Equal(LanguageCode.English, restored.SecondaryTargetLanguage);
         Assert.Equal(460, restored.Window.PopupWidth);
         Assert.Equal("Alt + D", restored.Hotkeys.SelectionTranslate.DisplayText);
-        Assert.Equal("Alt + A", restored.Hotkeys.InputTranslate.DisplayText);
+        Assert.Equal("Alt + R", restored.Hotkeys.ReplaceTranslate.DisplayText);
         Assert.Equal("Alt + S", restored.Hotkeys.ScreenshotTranslate.DisplayText);
 
         // Missing V1.1 fields safely initialized to defaults.
@@ -184,12 +184,12 @@ public sealed class PolishAndBackTranslationContractsTests
         Assert.Equal(PolishStyle.General, restored.Polish.DefaultStyle);
         Assert.False(restored.Polish.ShowDiffByDefault);
         Assert.Equal(PolishConfig.DefaultCustomPrompt, restored.Polish.CustomPrompt);
-        Assert.Equal("Alt + P", restored.Hotkeys.SelectionPolish.DisplayText);
+        Assert.Equal("Alt + Q", restored.Hotkeys.SelectionPolish.DisplayText);
 
         // Cloning the deserialized V1 settings succeeds cleanly.
         var cloned = restored.Clone();
         Assert.False(cloned.AutoBackTranslate);
-        Assert.Equal("Alt + P", cloned.Hotkeys.SelectionPolish.DisplayText);
+        Assert.Equal("Alt + Q", cloned.Hotkeys.SelectionPolish.DisplayText);
         Assert.Equal(PolishStyle.General, cloned.Polish.DefaultStyle);
     }
 

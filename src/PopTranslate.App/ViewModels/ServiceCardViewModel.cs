@@ -54,7 +54,8 @@ public sealed partial class ServiceCardViewModel : ObservableObject
         PolishStyle initialPolishStyle = PolishStyle.General,
         bool isWaitingOnDemand = false,
         Action? flyoutOpenedCallback = null,
-        Action? flyoutClosedCallback = null)
+        Action? flyoutClosedCallback = null,
+        bool isDeferredUntilExpanded = false)
     {
         ArgumentNullException.ThrowIfNull(config);
         _retryCallback = retryCallback;
@@ -74,16 +75,22 @@ public sealed partial class ServiceCardViewModel : ObservableObject
         ProviderKind = config.Kind;
         Mode = mode;
         SourceText = sourceText ?? string.Empty;
-        IsCollapsed = config.IsCollapsedByDefault;
+        IsCollapsed = config.IsCollapsedByDefault || isDeferredUntilExpanded;
         CardPolishStyle = initialPolishStyle;
         ShowDiff = mode == PopupMode.Polish && showDiffByDefault;
         HasSourceWindow = hasSourceWindow;
         IsWaitingOnDemand = mode == PopupMode.Polish && isWaitingOnDemand;
+        IsDeferredUntilExpanded = !IsWaitingOnDemand && isDeferredUntilExpanded;
 
         if (IsWaitingOnDemand)
         {
             State = ProviderStreamState.Cancelled;
             StatusText = string.Empty;
+        }
+        else if (IsDeferredUntilExpanded)
+        {
+            State = ProviderStreamState.Cancelled;
+            StatusText = mode == PopupMode.Polish ? "点击展开润色" : "点击展开翻译";
         }
         else
         {
@@ -132,6 +139,12 @@ public sealed partial class ServiceCardViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(ShowStreamingPlaceholder))]
     [NotifyPropertyChangedFor(nameof(ShowContextualActionRow))]
     public partial bool IsWaitingOnDemand { get; set; }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsLoading))]
+    [NotifyPropertyChangedFor(nameof(ShowStreamingPlaceholder))]
+    [NotifyPropertyChangedFor(nameof(ShowContextualActionRow))]
+    public partial bool IsDeferredUntilExpanded { get; set; }
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasText))]
@@ -252,15 +265,15 @@ public sealed partial class ServiceCardViewModel : ObservableObject
 
     public string OnDemandSummaryText => $"{DisplayName} · {CardPolishStyleLabel}";
 
-    public bool IsLoading => !IsWaitingOnDemand && State is ProviderStreamState.Pending or ProviderStreamState.Streaming;
+    public bool IsLoading => !IsWaitingOnDemand && !IsDeferredUntilExpanded && State is ProviderStreamState.Pending or ProviderStreamState.Streaming;
 
-    public bool IsStreaming => !IsWaitingOnDemand && State == ProviderStreamState.Streaming;
+    public bool IsStreaming => !IsWaitingOnDemand && !IsDeferredUntilExpanded && State == ProviderStreamState.Streaming;
 
     public bool HasError => !string.IsNullOrWhiteSpace(ErrorMessage);
 
     public bool HasText => !string.IsNullOrEmpty(TranslatedText);
 
-    public bool ShowContextualActionRow => HasText && !IsWaitingOnDemand;
+    public bool ShowContextualActionRow => HasText && !IsWaitingOnDemand && !IsDeferredUntilExpanded;
 
     public bool HasMarkdownSyntax => !IsLoading && ContainsInlineMarkdown(TranslatedText);
 
@@ -352,8 +365,9 @@ public sealed partial class ServiceCardViewModel : ObservableObject
         var styleChanged = CardPolishStyle != nextStyle;
         CardPolishStyle = nextStyle;
 
-        if (styleChanged || IsWaitingOnDemand || !IsLoading)
+        if (styleChanged || IsWaitingOnDemand || IsDeferredUntilExpanded || !IsLoading)
         {
+            IsDeferredUntilExpanded = false;
             await _retryCallback(CardId);
         }
     }
@@ -361,6 +375,7 @@ public sealed partial class ServiceCardViewModel : ObservableObject
     public void ResetForRetry()
     {
         IsWaitingOnDemand = false;
+        IsDeferredUntilExpanded = false;
         TranslatedText = string.Empty;
         ErrorMessage = null;
         IsReasoning = false;
@@ -376,9 +391,56 @@ public sealed partial class ServiceCardViewModel : ObservableObject
         _layoutChangedCallback();
     }
 
+    public void ApplyCachedResult(
+        string translatedText,
+        LanguageCode? detectedSource,
+        LanguageCode targetLanguage,
+        TimeSpan originalElapsed,
+        string? backTranslatedText = null,
+        string? backTranslateTargetLabel = null)
+    {
+        IsWaitingOnDemand = false;
+        IsDeferredUntilExpanded = false;
+        IsReasoning = false;
+        ErrorMessage = null;
+
+        if (detectedSource is { IsAuto: false })
+        {
+            DetectedSourceLanguage = detectedSource;
+        }
+
+        if (!targetLanguage.IsAuto)
+        {
+            TargetLanguage = targetLanguage;
+        }
+
+        TranslatedText = translatedText ?? string.Empty;
+        State = ProviderStreamState.Completed;
+        StatusText = originalElapsed.TotalMilliseconds > 0
+            ? $"缓存 · {FormatElapsed(originalElapsed)}"
+            : "缓存";
+        RecomputeDiffIfNeeded();
+
+        if (!string.IsNullOrWhiteSpace(backTranslatedText))
+        {
+            IsBackTranslateVisible = true;
+            BackTranslatedText = backTranslatedText;
+            BackTranslateErrorMessage = null;
+            BackTranslateState = ProviderStreamState.Completed;
+            BackTranslateStatusText = "缓存";
+            if (!string.IsNullOrWhiteSpace(backTranslateTargetLabel))
+            {
+                BackTranslateTargetLabel = backTranslateTargetLabel;
+            }
+        }
+
+        _layoutChangedCallback();
+    }
+
     public void ApplyUpdate(ProviderStreamUpdate update)
     {
         IsWaitingOnDemand = false;
+        IsDeferredUntilExpanded = false;
         IsReasoning = update.State == ProviderStreamState.Streaming && update.IsReasoning;
         State = update.State;
 
@@ -557,6 +619,12 @@ public sealed partial class ServiceCardViewModel : ObservableObject
         }
 
         IsCollapsed = !IsCollapsed;
+        if (!IsCollapsed && IsDeferredUntilExpanded)
+        {
+            IsDeferredUntilExpanded = false;
+            _ = _retryCallback(CardId);
+        }
+
         _layoutChangedCallback();
     }
 

@@ -12,6 +12,10 @@ public interface ITranslationOrchestrator
         TranslationRequest request,
         CancellationToken cancellationToken = default);
 
+    Task<TranslationResult> TranslateFirstAvailableAsync(
+        TranslationRequest request,
+        CancellationToken cancellationToken = default);
+
     Task<ProviderHealthCheckResult> TestProviderAsync(
         ProviderInstanceConfig config,
         CancellationToken cancellationToken = default);

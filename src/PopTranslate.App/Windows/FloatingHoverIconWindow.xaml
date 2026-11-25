@@ -1,16 +1,8 @@
-<winex:WindowEx
+<Window
     x:Class="PopTranslate.App.Windows.FloatingHoverIconWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:winex="using:WinUIEx"
-    Title="PopTranslate Hover"
-    Width="34"
-    Height="34"
-    IsTitleBarVisible="False"
-    IsResizable="False"
-    IsMaximizable="False"
-    IsMinimizable="False"
-    IsAlwaysOnTop="True">
+    Title="PopTranslate Hover">
 
     <Grid
         x:Name="RootGrid"
@@ -24,42 +16,10 @@
             BorderThickness="1"
             BorderBrush="{ThemeResource SurfaceStrokeColorFlyoutBrush}"
             Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
-            <Border.ContextFlyout>
-                <MenuFlyout
-                    x:Name="HoverContextFlyout"
-                    ShouldConstrainToRootBounds="False"
-                    Opening="HoverContextFlyout_Opening"
-                    Closed="HoverContextFlyout_Closed">
-                    <MenuFlyoutItem
-                        x:Name="BlacklistCurrentAppMenuItem"
-                        Text="屏蔽当前应用"
-                        Click="BlacklistCurrentAppMenuItem_Click">
-                        <MenuFlyoutItem.Icon>
-                            <FontIcon Glyph="&#xE8F8;" />
-                        </MenuFlyoutItem.Icon>
-                    </MenuFlyoutItem>
-                    <MenuFlyoutItem
-                        x:Name="MuteHover30MinMenuItem"
-                        Text="暂停划词 30 分钟"
-                        Click="MuteHover30MinMenuItem_Click">
-                        <MenuFlyoutItem.Icon>
-                            <FontIcon Glyph="&#xE769;" />
-                        </MenuFlyoutItem.Icon>
-                    </MenuFlyoutItem>
-                    <MenuFlyoutSeparator />
-                    <MenuFlyoutItem
-                        x:Name="DisableHoverIconMenuItem"
-                        Text="关闭悬浮图标"
-                        Click="DisableHoverIconMenuItem_Click">
-                        <MenuFlyoutItem.Icon>
-                            <FontIcon Glyph="&#xE711;" />
-                        </MenuFlyoutItem.Icon>
-                    </MenuFlyoutItem>
-                </MenuFlyout>
-            </Border.ContextFlyout>
-
             <Button
                 x:Name="TranslateActionButton"
+                MinWidth="0"
+                MinHeight="0"
                 HorizontalAlignment="Stretch"
                 VerticalAlignment="Stretch"
                 Padding="0"
@@ -67,11 +27,11 @@
                 BorderThickness="0"
                 Background="Transparent"
                 AutomationProperties.Name="翻译选中文本"
-                ToolTipService.ToolTip="翻译选中文本（右键管理划词）"
+                ToolTipService.ToolTip="左键翻译选中文本 · 右键替换翻译、设置或退出"
                 Click="TranslateActionButton_Click">
                 <TextBlock
                     Text="译"
-                    FontSize="14"
+                    FontSize="13.5"
                     FontWeight="SemiBold"
                     Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
                     HorizontalAlignment="Center"
@@ -79,4 +39,4 @@
             </Button>
         </Border>
     </Grid>
-</winex:WindowEx>
+</Window>

@@ -998,6 +998,382 @@ public sealed class MilestoneUnifiedUpgradeTests : IDisposable
         Assert.Equal("llm-translate", Assert.Single(fallbackPolish).ProviderInstanceId);
     }
 
+    [Fact]
+    public async Task ProvidersAndOcrSettingsViewModels_AutoPersistApiKeysAndEndpointsWithoutManualSave_AndRuntimeSubdirPortablePath()
+    {
+        var store = new JsonSettingsStore(_protector, _settingsPath);
+        var initial = AppSettings.CreateDefault();
+        await store.SaveAsync(initial);
+
+        var modelsHandler = new DelegateHttpHandler((_, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"data":[{"id":"deepseek-chat"},{"id":"deepseek-reasoner"}]}""", Encoding.UTF8, "application/json"),
+            }));
+        var factory = new StubProxyHttpClientFactory(modelsHandler);
+        var detector = new LocalLanguageDetector();
+        var preprocessor = new TextPreprocessor();
+        var translationOrchestrator = new TranslationOrchestrator(
+            store,
+            preprocessor,
+            new DualTargetLanguageRouter(detector),
+            [new OpenAiCompatibleTranslationProvider(factory, _protector, store)]);
+        var modelDiscovery = new OpenAiModelDiscoveryService(factory);
+
+        var providersVm = new PopTranslate.App.ViewModels.ProvidersSettingsViewModel(
+            store,
+            _protector,
+            translationOrchestrator,
+            modelDiscovery);
+
+        providersVm.LoadFrom(store.Current);
+
+        // Select the default disabled OpenAI provider and configure BaseUrl + ApiKey WITHOUT clicking Save
+        var defaultLlm = providersVm.Providers.Single(p => p.Id == "openai-compatible-default");
+        Assert.False(defaultLlm.Enabled);
+        providersVm.SelectedProvider = defaultLlm;
+
+        defaultLlm.BaseUrl = "https://api.deepseek.com/v1";
+        defaultLlm.Model = "deepseek-chat";
+        defaultLlm.ApiKeyPlaintext = "sk-live-deepseek-secret-key";
+
+        // Wait for debounced auto-save to flush to disk
+        await Task.Delay(500);
+
+        var reloadedFromDisk = await store.LoadAsync();
+        var savedLlm = reloadedFromDisk.Providers.Single(p => p.Id == "openai-compatible-default");
+        Assert.Equal("https://api.deepseek.com/v1", savedLlm.BaseUrl);
+        Assert.Equal("deepseek-chat", savedLlm.Model);
+        Assert.True(savedLlm.Enabled);
+        Assert.NotEmpty(savedLlm.EncryptedApiKey);
+        Assert.True(_protector.TryUnprotect(savedLlm.EncryptedApiKey, out var decryptedKey));
+        Assert.Equal("sk-live-deepseek-secret-key", decryptedKey);
+
+        // FetchModelsCommand immediately persists freshly edited key/url before debounce expires
+        defaultLlm.ApiKeyPlaintext = "sk-updated-before-fetch";
+        await providersVm.FetchModelsCommand.ExecuteAsync(null);
+        var afterFetch = await store.LoadAsync();
+        var savedAfterFetch = afterFetch.Providers.Single(p => p.Id == "openai-compatible-default");
+        Assert.True(_protector.TryUnprotect(savedAfterFetch.EncryptedApiKey, out var fetchDecrypted));
+        Assert.Equal("sk-updated-before-fetch", fetchDecrypted);
+
+        // Vision OCR ViewModel also auto-saves API key & BaseUrl without manual Save click
+        var ocrOrchestrator = new OcrOrchestrator(store, preprocessor, [new WindowsOcrProvider()]);
+        var ocrVm = new PopTranslate.App.ViewModels.OcrSettingsViewModel(store, _protector, ocrOrchestrator, modelDiscovery);
+        await ocrVm.LoadFromAsync(store.Current);
+
+        ocrVm.VisionBaseUrl = "https://api.siliconflow.cn/v1";
+        ocrVm.VisionApiKeyPlaintext = "sk-vision-auto-saved";
+        await Task.Delay(500);
+
+        var afterOcr = await store.LoadAsync();
+        Assert.Equal("https://api.siliconflow.cn/v1", afterOcr.Ocr.VisionBaseUrl);
+        Assert.True(_protector.TryUnprotect(afterOcr.Ocr.EncryptedVisionApiKey, out var decryptedVisionKey));
+        Assert.Equal("sk-vision-auto-saved", decryptedVisionKey);
+
+        // Clean Release layout: runtime/ subdirectory detects parent portable marker
+        var releaseRoot = Path.Combine(_tempDir, "PopTranslate-win-x64");
+        var runtimeDir = Path.Combine(releaseRoot, "runtime");
+        Directory.CreateDirectory(runtimeDir);
+        await File.WriteAllTextAsync(Path.Combine(releaseRoot, "portable"), string.Empty);
+
+        Assert.Equal(
+            Path.Combine(releaseRoot, "data", "settings.json"),
+            JsonSettingsStore.GetDefaultSettingsPath(runtimeDir));
+    }
+
+    [Fact]
+    public async Task TrayAndHoverContextMenuCommands_ToggleHoverIconDeterministically_AndReplaceTranslateSequentialFailover()
+    {
+        var store = new JsonSettingsStore(_protector, _settingsPath);
+        var initial = AppSettings.CreateDefault();
+        Assert.Equal(new HotkeyGesture(HotkeyModifiers.Alt, 0x52), initial.Hotkeys.ReplaceTranslate);
+        Assert.Equal("Alt + R", initial.Hotkeys.ReplaceTranslate.DisplayText);
+        await store.SaveAsync(initial);
+
+        // 1. System Tray PopupMenu commands (H.NotifyIcon PopupMenu invokes ICommand, NOT XAML Click)
+        using var tray = new PopTranslate.App.Services.TrayIconHost();
+        tray.SyncMenuState(initial, isRunningAsAdministrator: false, isHoverMuted: false, isClipboardListenerEnabled: false);
+
+        Assert.True(tray.IsHoverIconEnabled);
+        Assert.Contains("Alt + R", tray.ReplaceTranslateLabel, StringComparison.Ordinal);
+
+        var observedHoverToggles = new List<bool>();
+        var observedMuteToggles = new List<bool>();
+        var replaceRequestedCount = 0;
+        tray.HoverIconToggled += (_, enabled) => observedHoverToggles.Add(enabled);
+        tray.HoverMuteToggled += (_, muted) => observedMuteToggles.Add(muted);
+        tray.ReplaceTranslateRequested += (_, _) => replaceRequestedCount++;
+
+        tray.ToggleHoverIconCommand.Execute(null);
+        Assert.Equal([false], observedHoverToggles);
+        Assert.False(tray.IsHoverIconEnabled);
+
+        tray.ToggleHoverIconCommand.Execute(null);
+        Assert.Equal([false, true], observedHoverToggles);
+        Assert.True(tray.IsHoverIconEnabled);
+
+        tray.ToggleHoverMuteCommand.Execute(null);
+        Assert.Equal([true], observedMuteToggles);
+
+        tray.ReplaceTranslateCommand.Execute(null);
+        Assert.Equal(1, replaceRequestedCount);
+
+        // 2. Floating Hover Icon native Win32 context menu items (reliable on WS_EX_NOACTIVATE windows)
+        var hoverMenuItems = PopTranslate.App.Windows.FloatingHoverIconWindow.BuildContextMenuItems("Code");
+        Assert.Contains(hoverMenuItems, item => item.Text == "替换翻译选中文本" && item.IsEnabled);
+        Assert.Contains(hoverMenuItems, item => item.Text == "屏蔽当前应用 (Code.exe)" && item.IsEnabled);
+        Assert.Contains(hoverMenuItems, item => item.Text == "暂停划词 30 分钟" && item.IsEnabled);
+        Assert.Contains(hoverMenuItems, item => item.Text == "关闭划词悬浮图标" && item.IsEnabled);
+        Assert.Contains(hoverMenuItems, item => item.Text == "打开设置..." && item.IsEnabled);
+        Assert.Contains(hoverMenuItems, item => item.Text == "退出程序" && item.IsEnabled);
+
+        // 2b. Real Win32 tray message window + icon loader + synchronous UpdateState re-entrancy survival (regression for mute-30m killing right-click)
+        var observedTrayTooltips = new List<string>();
+        var deletedCount = 0;
+        using (var realPumpProbe = new PopTranslate.Win32.Windowing.Win32TrayIconService())
+        {
+            var probeOk = realPumpProbe.CreateOrUpdate("Probe", null, static () => []);
+            Assert.True(realPumpProbe.IsMessageWindowReady);
+            Assert.True(realPumpProbe.HasLoadedIcon);
+            if (PopTranslate.Win32.Windowing.Win32TrayIconService.IsShellTrayAvailable())
+            {
+                Assert.True(probeOk);
+            }
+        }
+
+        using (var nativeTrayBackend = new PopTranslate.Win32.Windowing.Win32TrayIconService((msg, tip) =>
+        {
+            if (msg == 2 /* NIM_DELETE */)
+            {
+                deletedCount++;
+            }
+            else
+            {
+                observedTrayTooltips.Add($"{msg}:{tip}");
+            }
+
+            return true;
+        }))
+        using (var liveTray = new PopTranslate.App.Services.TrayIconHost(nativeTrayBackend))
+        {
+            var exitCount = 0;
+            var muteEvents = new List<bool>();
+
+            liveTray.HoverMuteToggled += (_, muted) =>
+            {
+                muteEvents.Add(muted);
+                // Synchronously call UpdateState inside the click callback (exact sequence that previously broke H.NotifyIcon)
+                liveTray.UpdateState(initial, isRunningAsAdministrator: false, isHoverMuted: muted, isClipboardListenerEnabled: false);
+            };
+            liveTray.ExitRequested += (_, _) => exitCount++;
+
+            liveTray.Initialize(initial, isRunningAsAdministrator: false, uiDispatcher: null, isHoverMuted: false, isClipboardListenerEnabled: false);
+            Assert.True(liveTray.IsTrayIconCreated);
+            Assert.True(nativeTrayBackend.IsMessageWindowReady);
+            Assert.True(nativeTrayBackend.HasLoadedIcon);
+
+            var initialMenu = liveTray.BuildMenuItems();
+            Assert.Contains(initialMenu, m => m.Id == PopTranslate.App.Services.TrayIconHost.CommandToggleHoverMute && !m.IsChecked);
+            Assert.Contains(initialMenu, m => m.Id == PopTranslate.App.Services.TrayIconHost.CommandExit && m.IsEnabled);
+
+            liveTray.DispatchMenuCommand(PopTranslate.App.Services.TrayIconHost.CommandToggleHoverMute);
+            Assert.Equal([true], muteEvents);
+            Assert.True(liveTray.IsTrayIconCreated);
+            Assert.Contains(observedTrayTooltips, x => x.Contains("划词已暂停", StringComparison.Ordinal));
+
+            var menuAfterMute = liveTray.BuildMenuItems();
+            Assert.Contains(menuAfterMute, m => m.Id == PopTranslate.App.Services.TrayIconHost.CommandToggleHoverMute && m.IsChecked && m.Text.Contains("已暂停", StringComparison.Ordinal));
+            Assert.Contains(menuAfterMute, m => m.Id == PopTranslate.App.Services.TrayIconHost.CommandExit && m.IsEnabled);
+
+            liveTray.DispatchMenuCommand(PopTranslate.App.Services.TrayIconHost.CommandExit);
+            Assert.Equal(1, exitCount);
+        }
+
+        Assert.Equal(1, deletedCount);
+
+        // 2c. TranslationPopupWindow XAML must hide right-side scrollbar chrome while keeping vertical scroll enabled
+        var repoRoot = AppContext.BaseDirectory;
+        while (!string.IsNullOrEmpty(repoRoot) && !File.Exists(Path.Combine(repoRoot, "PopTranslate.sln")))
+        {
+            repoRoot = Path.GetDirectoryName(repoRoot);
+        }
+
+        Assert.NotNull(repoRoot);
+        var popupXamlPath = Path.Combine(repoRoot!, "src", "PopTranslate.App", "Windows", "TranslationPopupWindow.xaml");
+        var popupXaml = await File.ReadAllTextAsync(popupXamlPath);
+        Assert.DoesNotContain("VerticalScrollBarVisibility=\"Auto\"", popupXaml, StringComparison.Ordinal);
+        Assert.DoesNotContain("VerticalScrollBarVisibility=\"Visible\"", popupXaml, StringComparison.Ordinal);
+        Assert.Contains("VerticalScrollBarVisibility=\"Hidden\"", popupXaml, StringComparison.Ordinal);
+
+        // 2d. HotkeysSettingsPage must NOT contain redundant 输入翻译快捷键 row
+        var hotkeysXamlPath = Path.Combine(repoRoot!, "src", "PopTranslate.App", "Pages", "HotkeysSettingsPage.xaml");
+        var hotkeysXaml = await File.ReadAllTextAsync(hotkeysXamlPath);
+        Assert.DoesNotContain("输入翻译快捷键", hotkeysXaml, StringComparison.Ordinal);
+
+        // 2e. Best-practice user config persistence: Roaming %APPDATA%, legacy %LOCALAPPDATA% migration, .bak backup recovery, and non-destructive publish-release.ps1
+        var roamingExpected = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "PopTranslate",
+            "settings.json");
+        var nonPortableDir = Path.Combine(_tempDir, "non-portable-bin");
+        Directory.CreateDirectory(nonPortableDir);
+        Assert.Equal(roamingExpected, JsonSettingsStore.GetDefaultSettingsPath(nonPortableDir));
+
+        var legacyLocalFile = Path.Combine(_tempDir, "legacy-local", "settings.json");
+        var newRoamingFile = Path.Combine(_tempDir, "roaming-appdata", "settings.json");
+        var legacySeedStore = new JsonSettingsStore(_protector, legacyLocalFile);
+        var seedSettings = AppSettings.CreateDefault();
+        seedSettings.Providers.Add(new ProviderInstanceConfig
+        {
+            Id = "cpa-custom",
+            DisplayName = "CPA",
+            Kind = ProviderKind.OpenAiCompatible,
+            Enabled = true,
+            BaseUrl = "https://cpa.example.com/v1",
+            Model = "gpt-4o",
+            EncryptedApiKey = _protector.Protect("sk-cpa-secret-persistent"),
+        });
+        await legacySeedStore.SaveAsync(seedSettings);
+
+        var migratedStore = new JsonSettingsStore(_protector, newRoamingFile, legacyFallbackFilePath: legacyLocalFile);
+        var migratedLoaded = await migratedStore.LoadAsync();
+        Assert.True(File.Exists(newRoamingFile));
+        var migratedCpa = Assert.Single(migratedLoaded.Providers, p => p.Id == "cpa-custom");
+        Assert.True(_protector.TryUnprotect(migratedCpa.EncryptedApiKey, out var migratedKey));
+        Assert.Equal("sk-cpa-secret-persistent", migratedKey);
+
+        // Second save writes rolling .bak backup, and corrupting primary settings.json recovers from .bak instead of wiping providers!
+        migratedLoaded.Window.PopupWidth = 500;
+        await migratedStore.SaveAsync(migratedLoaded);
+        Assert.True(File.Exists(newRoamingFile + ".bak"));
+
+        await File.WriteAllTextAsync(newRoamingFile, "{truncated-corrupt!", Encoding.UTF8);
+        var recoveredFromBakStore = new JsonSettingsStore(_protector, newRoamingFile);
+        var recoveredSettings = await recoveredFromBakStore.LoadAsync();
+        Assert.Contains(recoveredSettings.Providers, p => p.Id == "cpa-custom");
+
+        // publish-release.ps1 must only replace runtime/ and binaries, NEVER deleting release/PopTranslate-win-x64/data or portable marker
+        var publishScript = await File.ReadAllTextAsync(Path.Combine(repoRoot!, "scripts", "publish-release.ps1"));
+        Assert.DoesNotContain("Remove-Item -LiteralPath $distRoot", publishScript, StringComparison.Ordinal);
+
+        // 3. HotkeysSettingsViewModel persists ReplaceTranslateGesture and syncs external EnableHoverIcon changes
+        var hotkeysVm = new PopTranslate.App.ViewModels.HotkeysSettingsViewModel(store);
+        hotkeysVm.LoadFrom(store.Current);
+        Assert.Equal(HotkeyConfig.DefaultReplaceTranslate, hotkeysVm.ReplaceTranslateGesture);
+
+        var customReplaceGesture = new HotkeyGesture(HotkeyModifiers.Control | HotkeyModifiers.Alt, 0x52);
+        hotkeysVm.UpdateGesture(HotkeyAction.ReplaceTranslate, customReplaceGesture);
+        await Task.Delay(150);
+
+        var afterHotkeySave = await store.LoadAsync();
+        Assert.Equal(customReplaceGesture, afterHotkeySave.Hotkeys.ReplaceTranslate);
+
+        hotkeysVm.ResetDefaultHotkeysCommand.Execute(null);
+        await Task.Delay(150);
+        var afterReset = await store.LoadAsync();
+        Assert.Equal(HotkeyConfig.DefaultReplaceTranslate, afterReset.Hotkeys.ReplaceTranslate);
+
+        // 4. Replace-Translate sequential failover: skips Polish role, fails over from broken #1 to #2, and does NOT waste tokens on #3
+        var invokedTokens = new List<string>();
+        var handler = new DelegateHttpHandler((req, _) =>
+        {
+            var url = req.RequestUri!.AbsoluteUri;
+            if (url.Contains("google.com/translate_a/", StringComparison.Ordinal) ||
+                url.Contains("googleapis.com/translate_a/", StringComparison.Ordinal))
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("""[["Replaced in place!","zh-CN"]]""", Encoding.UTF8, "application/json"),
+                });
+            }
+
+            var token = req.Headers.Authorization?.Parameter ?? string.Empty;
+            lock (invokedTokens)
+            {
+                invokedTokens.Add(token);
+            }
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.InternalServerError)
+            {
+                Content = new StringContent("""{"error":{"message":"Upstream gateway timeout"}}""", Encoding.UTF8, "application/json"),
+            });
+        });
+
+        var failoverSettings = store.Current.Clone();
+        failoverSettings.Providers =
+        [
+            new ProviderInstanceConfig
+            {
+                Id = "polish-only",
+                DisplayName = "Polish Only",
+                Kind = ProviderKind.OpenAiCompatible,
+                Role = ProviderRole.Polish,
+                Enabled = true,
+                SortOrder = 0,
+                BaseUrl = "https://mock-llm.local/v1",
+                Model = "gpt-4o-mini",
+                EncryptedApiKey = _protector.Protect("sk-polish-must-skip"),
+            },
+            new ProviderInstanceConfig
+            {
+                Id = "primary-broken-llm",
+                DisplayName = "Primary Broken LLM",
+                Kind = ProviderKind.OpenAiCompatible,
+                Role = ProviderRole.Translate,
+                Enabled = true,
+                SortOrder = 1,
+                BaseUrl = "https://mock-llm.local/v1",
+                Model = "gpt-4o-mini",
+                EncryptedApiKey = _protector.Protect("sk-primary-broken"),
+            },
+            new ProviderInstanceConfig
+            {
+                Id = "secondary-google-free",
+                DisplayName = "Google Free Fallback",
+                Kind = ProviderKind.FreeTraditional,
+                Role = ProviderRole.Translate,
+                FreeEngine = FreeTranslatorEngine.Google,
+                Enabled = true,
+                SortOrder = 2,
+            },
+            new ProviderInstanceConfig
+            {
+                Id = "tertiary-unused-llm",
+                DisplayName = "Tertiary LLM",
+                Kind = ProviderKind.OpenAiCompatible,
+                Role = ProviderRole.Translate,
+                Enabled = true,
+                SortOrder = 3,
+                BaseUrl = "https://mock-llm.local/v1",
+                Model = "gpt-4o-mini",
+                EncryptedApiKey = _protector.Protect("sk-tertiary-unused"),
+            },
+        ];
+        await store.SaveAsync(failoverSettings);
+
+        var factory = new StubProxyHttpClientFactory(handler);
+        var detector = new LocalLanguageDetector();
+        var orchestrator = new TranslationOrchestrator(
+            store,
+            new TextPreprocessor(),
+            new DualTargetLanguageRouter(detector),
+            [
+                new FreeTraditionalTranslationProvider(factory),
+                new OpenAiCompatibleTranslationProvider(factory, _protector, store),
+            ]);
+
+        var replaceResult = await orchestrator.TranslateFirstAvailableAsync(new TranslationRequest(
+            Text: "原地替换测试",
+            SourceLanguage: LanguageCode.Auto,
+            TargetLanguage: LanguageCode.Auto));
+
+        Assert.True(replaceResult.IsSuccess, replaceResult.ErrorMessage);
+        Assert.Equal("secondary-google-free", replaceResult.ProviderInstanceId);
+        Assert.Equal("Replaced in place!", replaceResult.TranslatedText);
+        Assert.Equal(["sk-primary-broken"], invokedTokens);
+    }
+
     private sealed class DelayedChunkStream : Stream
     {
         private readonly MemoryStream _buffer = new();

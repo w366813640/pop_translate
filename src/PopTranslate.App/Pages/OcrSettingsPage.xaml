@@ -247,9 +247,11 @@
                         SelectedItem="{x:Bind ViewModel.SelectedDiscoveredModel, Mode=TwoWay}" />
 
                     <PasswordBox
-                        Header="Vision API Key（Windows DPAPI 本地加密保存）"
+                        Header="Vision API Key（输入后自动经 Windows DPAPI 本地加密保存）"
                         PlaceholderText="sk-..."
-                        Password="{x:Bind ViewModel.VisionApiKeyPlaintext, Mode=TwoWay}" />
+                        PasswordRevealMode="Peek"
+                        Password="{x:Bind ViewModel.VisionApiKeyPlaintext, Mode=OneWay}"
+                        PasswordChanged="VisionApiKeyBox_PasswordChanged" />
 
                     <StackPanel Spacing="6">
                         <Grid>

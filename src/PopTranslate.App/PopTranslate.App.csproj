@@ -14,17 +14,27 @@
     <WindowsAppSDKSelfContained Condition="'$(WindowsAppSDKSelfContained)' == '' and '$(Configuration)' == 'Release'">true</WindowsAppSDKSelfContained>
     <WindowsAppSDKSelfContained Condition="'$(WindowsAppSDKSelfContained)' == ''">false</WindowsAppSDKSelfContained>
     <PublishReadyToRun Condition="'$(Configuration)' == 'Release'">true</PublishReadyToRun>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <GCConserveMemory>5</GCConserveMemory>
   </PropertyGroup>
+
+  <ItemGroup>
+    <RuntimeHostConfigurationOption Include="System.GC.ConserveMemory" Value="$(GCConserveMemory)" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\PopTranslate.Core\PopTranslate.Core.csproj" />
     <ProjectReference Include="..\PopTranslate.Win32\PopTranslate.Win32.csproj" />
+    <ProjectReference Include="..\PopTranslate.Launcher\PopTranslate.Launcher.csproj"
+                      ReferenceOutputAssembly="false"
+                      SkipGetTargetFrameworkProperties="true"
+                      Private="false"
+                      Condition="'$(Configuration)' == 'Release'" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.7.0" />
     <PackageReference Include="WinUIEx" Version="2.9.3" />
-    <PackageReference Include="H.NotifyIcon.WinUI" Version="2.4.1" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.15" />
   </ItemGroup>
@@ -32,4 +42,14 @@
   <ItemGroup>
     <Content Include="Assets\**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+
+  <Target Name="AssembleCleanReleaseDistribution" AfterTargets="Build;Publish" Condition="'$(Configuration)' == 'Release'">
+    <PropertyGroup>
+      <_RepoRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..'))</_RepoRoot>
+      <_LauncherExe>$(MSBuildThisFileDirectory)..\PopTranslate.Launcher\bin\x64\Release\PopTranslate.exe</_LauncherExe>
+      <_StageDir Condition="'$(PublishDir)' != '' and Exists('$(PublishDir)PopTranslate.App.exe')">$(PublishDir)</_StageDir>
+      <_StageDir Condition="'$(_StageDir)' == ''">$(TargetDir)</_StageDir>
+    </PropertyGroup>
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(_RepoRoot)\scripts\publish-release.ps1&quot; -TargetDir &quot;$(_StageDir.TrimEnd('\'))&quot; -LauncherExe &quot;$(_LauncherExe)&quot; -RepoRoot &quot;$(_RepoRoot)&quot;" />
+  </Target>
 </Project>

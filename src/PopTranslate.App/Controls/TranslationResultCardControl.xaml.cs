@@ -16,6 +16,48 @@ public sealed partial class TranslationResultCardControl : UserControl
 {
     private static readonly FontFamily CodeFontFamily = new("Cascadia Mono, Consolas, monospace");
 
+    [ThreadStatic]
+    private static ThemeBrushPalette? s_lightBrushes;
+
+    [ThreadStatic]
+    private static ThemeBrushPalette? s_darkBrushes;
+
+    private sealed class ThemeBrushPalette
+    {
+        public required SolidColorBrush CodeForeground { get; init; }
+        public required SolidColorBrush CodeBackground { get; init; }
+        public required SolidColorBrush DeleteForeground { get; init; }
+        public required SolidColorBrush DeleteBackground { get; init; }
+        public required SolidColorBrush InsertForeground { get; init; }
+        public required SolidColorBrush InsertBackground { get; init; }
+    }
+
+    private static ThemeBrushPalette GetBrushes(bool isDark)
+    {
+        if (isDark)
+        {
+            return s_darkBrushes ??= new ThemeBrushPalette
+            {
+                CodeForeground = new SolidColorBrush(Color.FromArgb(0xFF, 0x9C, 0xDC, 0xFE)),
+                CodeBackground = new SolidColorBrush(Color.FromArgb(0x38, 0xFF, 0xFF, 0xFF)),
+                DeleteForeground = new SolidColorBrush(Color.FromArgb(0xFF, 0xFD, 0xA2, 0x9B)),
+                DeleteBackground = new SolidColorBrush(Color.FromArgb(0x47, 0xF0, 0x44, 0x38)),
+                InsertForeground = new SolidColorBrush(Color.FromArgb(0xFF, 0x6C, 0xE9, 0xA6)),
+                InsertBackground = new SolidColorBrush(Color.FromArgb(0x40, 0x12, 0xB7, 0x6A)),
+            };
+        }
+
+        return s_lightBrushes ??= new ThemeBrushPalette
+        {
+            CodeForeground = new SolidColorBrush(Color.FromArgb(0xFF, 0x0F, 0x4C, 0x81)),
+            CodeBackground = new SolidColorBrush(Color.FromArgb(0x18, 0x00, 0x00, 0x00)),
+            DeleteForeground = new SolidColorBrush(Color.FromArgb(0xFF, 0xB4, 0x23, 0x18)),
+            DeleteBackground = new SolidColorBrush(Color.FromArgb(0x33, 0xF0, 0x44, 0x38)),
+            InsertForeground = new SolidColorBrush(Color.FromArgb(0xFF, 0x06, 0x76, 0x47)),
+            InsertBackground = new SolidColorBrush(Color.FromArgb(0x33, 0x12, 0xB7, 0x6A)),
+        };
+    }
+
     public static readonly DependencyProperty ViewModelProperty =
         DependencyProperty.Register(
             nameof(ViewModel),
@@ -202,12 +244,9 @@ public sealed partial class TranslationResultCardControl : UserControl
         FormattedRichTextBlock.TextHighlighters.Clear();
 
         var isDark = currentTheme == ElementTheme.Dark;
-        var codeFgBrush = new SolidColorBrush(isDark
-            ? Color.FromArgb(0xFF, 0x9C, 0xDC, 0xFE)
-            : Color.FromArgb(0xFF, 0x0F, 0x4C, 0x81));
-        var codeBgBrush = new SolidColorBrush(isDark
-            ? Color.FromArgb(0x38, 0xFF, 0xFF, 0xFF)
-            : Color.FromArgb(0x18, 0x00, 0x00, 0x00));
+        var brushes = GetBrushes(isDark);
+        var codeFgBrush = brushes.CodeForeground;
+        var codeBgBrush = brushes.CodeBackground;
 
         var codeHighlighter = new TextHighlighter
         {
@@ -373,20 +412,11 @@ public sealed partial class TranslationResultCardControl : UserControl
         }
 
         var isDark = ActualTheme == ElementTheme.Dark;
-
-        var deleteFgBrush = new SolidColorBrush(isDark
-            ? Color.FromArgb(0xFF, 0xFD, 0xA2, 0x9B)
-            : Color.FromArgb(0xFF, 0xB4, 0x23, 0x18));
-        var deleteBgBrush = new SolidColorBrush(isDark
-            ? Color.FromArgb(0x47, 0xF0, 0x44, 0x38)
-            : Color.FromArgb(0x33, 0xF0, 0x44, 0x38));
-
-        var insertFgBrush = new SolidColorBrush(isDark
-            ? Color.FromArgb(0xFF, 0x6C, 0xE9, 0xA6)
-            : Color.FromArgb(0xFF, 0x06, 0x76, 0x47));
-        var insertBgBrush = new SolidColorBrush(isDark
-            ? Color.FromArgb(0x40, 0x12, 0xB7, 0x6A)
-            : Color.FromArgb(0x33, 0x12, 0xB7, 0x6A));
+        var brushes = GetBrushes(isDark);
+        var deleteFgBrush = brushes.DeleteForeground;
+        var deleteBgBrush = brushes.DeleteBackground;
+        var insertFgBrush = brushes.InsertForeground;
+        var insertBgBrush = brushes.InsertBackground;
 
         var deleteHighlighter = new TextHighlighter
         {

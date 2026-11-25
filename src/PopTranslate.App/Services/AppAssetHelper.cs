@@ -9,6 +9,32 @@ internal static class AppAssetHelper
 {
     public static string IconPath => Path.Combine(AppContext.BaseDirectory, "Assets", "poptranslate.ico");
 
+    public static string ResolveEntryExecutablePath()
+    {
+        try
+        {
+            var trimmed = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (string.Equals(Path.GetFileName(trimmed), "runtime", StringComparison.OrdinalIgnoreCase))
+            {
+                var parent = Directory.GetParent(trimmed);
+                if (parent is not null)
+                {
+                    var rootLauncher = Path.Combine(parent.FullName, "PopTranslate.exe");
+                    if (File.Exists(rootLauncher))
+                    {
+                        return rootLauncher;
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // Fall back to current process path.
+        }
+
+        return Environment.ProcessPath ?? string.Empty;
+    }
+
     public static void TryApplyWindowIcon(Window window)
     {
         try

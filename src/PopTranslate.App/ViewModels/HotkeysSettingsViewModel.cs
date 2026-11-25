@@ -34,13 +34,15 @@ public sealed partial class HotkeysSettingsViewModel : ObservableObject
         _settingsStore = settingsStore;
     }
 
+    public event EventHandler<bool>? HoverIconToggled;
+
     public ObservableCollection<string> ProcessBlacklist { get; } = [];
 
     [ObservableProperty]
     public partial HotkeyGesture SelectionTranslateGesture { get; set; } = HotkeyConfig.DefaultSelectionTranslate;
 
     [ObservableProperty]
-    public partial HotkeyGesture InputTranslateGesture { get; set; } = HotkeyConfig.DefaultInputTranslate;
+    public partial HotkeyGesture ReplaceTranslateGesture { get; set; } = HotkeyConfig.DefaultReplaceTranslate;
 
     [ObservableProperty]
     public partial HotkeyGesture ScreenshotTranslateGesture { get; set; } = HotkeyConfig.DefaultScreenshotTranslate;
@@ -55,7 +57,7 @@ public sealed partial class HotkeysSettingsViewModel : ObservableObject
     public partial string? SelectionHotkeyError { get; set; }
 
     [ObservableProperty]
-    public partial string? InputHotkeyError { get; set; }
+    public partial string? ReplaceTranslateHotkeyError { get; set; }
 
     [ObservableProperty]
     public partial string? ScreenshotHotkeyError { get; set; }
@@ -105,7 +107,7 @@ public sealed partial class HotkeysSettingsViewModel : ObservableObject
         try
         {
             SelectionTranslateGesture = settings.Hotkeys.SelectionTranslate;
-            InputTranslateGesture = settings.Hotkeys.InputTranslate;
+            ReplaceTranslateGesture = settings.Hotkeys.ReplaceTranslate;
             ScreenshotTranslateGesture = settings.Hotkeys.ScreenshotTranslate;
             SilentOcrGesture = settings.Hotkeys.SilentOcr;
             SelectionPolishGesture = settings.Hotkeys.SelectionPolish;
@@ -136,10 +138,23 @@ public sealed partial class HotkeysSettingsViewModel : ObservableObject
         }
     }
 
+    public void SyncHoverIconFromExternal(bool enabled)
+    {
+        _isLoading = true;
+        try
+        {
+            EnableHoverIcon = enabled;
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
     public void UpdateRegistrationResults(IReadOnlyDictionary<HotkeyAction, HotkeyRegistrationResult> results)
     {
         SelectionHotkeyError = ExtractError(results, HotkeyAction.SelectionTranslate);
-        InputHotkeyError = ExtractError(results, HotkeyAction.InputTranslate);
+        ReplaceTranslateHotkeyError = ExtractError(results, HotkeyAction.ReplaceTranslate);
         ScreenshotHotkeyError = ExtractError(results, HotkeyAction.ScreenshotTranslate);
         SilentOcrHotkeyError = ExtractError(results, HotkeyAction.SilentOcr);
         SelectionPolishHotkeyError = ExtractError(results, HotkeyAction.SelectionPolish);
@@ -152,8 +167,8 @@ public sealed partial class HotkeysSettingsViewModel : ObservableObject
             case HotkeyAction.SelectionTranslate:
                 SelectionTranslateGesture = gesture;
                 break;
-            case HotkeyAction.InputTranslate:
-                InputTranslateGesture = gesture;
+            case HotkeyAction.ReplaceTranslate:
+                ReplaceTranslateGesture = gesture;
                 break;
             case HotkeyAction.ScreenshotTranslate:
                 ScreenshotTranslateGesture = gesture;
@@ -231,11 +246,11 @@ public sealed partial class HotkeysSettingsViewModel : ObservableObject
     private void ResetDefaultHotkeys()
     {
         SelectionTranslateGesture = HotkeyConfig.DefaultSelectionTranslate;
-        InputTranslateGesture = HotkeyConfig.DefaultInputTranslate;
+        ReplaceTranslateGesture = HotkeyConfig.DefaultReplaceTranslate;
         ScreenshotTranslateGesture = HotkeyConfig.DefaultScreenshotTranslate;
         SilentOcrGesture = HotkeyConfig.DefaultSilentOcr;
         SelectionPolishGesture = HotkeyConfig.DefaultSelectionPolish;
-        StatusMessage = "已恢复默认全局快捷键（Alt+D / Alt+A / Alt+S / Alt+Shift+S / Alt+P）。";
+        StatusMessage = "已恢复默认全局快捷键（Alt+E / Alt+R / Alt+W / Alt+Shift+W / Alt+Q）。";
         SaveIfReady();
     }
 
@@ -304,7 +319,17 @@ public sealed partial class HotkeysSettingsViewModel : ObservableObject
     }
 
     partial void OnEnableDoubleTapCopyChanged(bool value) => SaveIfReady();
-    partial void OnEnableHoverIconChanged(bool value) => SaveIfReady();
+
+    partial void OnEnableHoverIconChanged(bool value)
+    {
+        if (_isLoading)
+        {
+            return;
+        }
+
+        HoverIconToggled?.Invoke(this, value);
+        SaveIfReady();
+    }
     partial void OnRequireCtrlForHoverChanged(bool value) => SaveIfReady();
     partial void OnEnableClipboardFallbackChanged(bool value) => SaveIfReady();
     partial void OnQuietModeInFullscreenChanged(bool value) => SaveIfReady();
@@ -328,7 +353,7 @@ public sealed partial class HotkeysSettingsViewModel : ObservableObject
         {
             var updated = _settingsStore.Current.Clone();
             updated.Hotkeys.SelectionTranslate = SelectionTranslateGesture;
-            updated.Hotkeys.InputTranslate = InputTranslateGesture;
+            updated.Hotkeys.ReplaceTranslate = ReplaceTranslateGesture;
             updated.Hotkeys.ScreenshotTranslate = ScreenshotTranslateGesture;
             updated.Hotkeys.SilentOcr = SilentOcrGesture;
             updated.Hotkeys.SelectionPolish = SelectionPolishGesture;

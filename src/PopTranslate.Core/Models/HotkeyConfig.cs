@@ -79,15 +79,13 @@ public sealed record HotkeyGesture(
 
 public sealed class HotkeyConfig
 {
-    public static readonly HotkeyGesture DefaultSelectionTranslate = new(HotkeyModifiers.Alt, 0x44); // Alt + D
-    public static readonly HotkeyGesture DefaultInputTranslate = new(HotkeyModifiers.Alt, 0x41); // Alt + A
-    public static readonly HotkeyGesture DefaultScreenshotTranslate = new(HotkeyModifiers.Alt, 0x53); // Alt + S
-    public static readonly HotkeyGesture DefaultSelectionPolish = new(HotkeyModifiers.Alt, 0x50); // Alt + P
-    public static readonly HotkeyGesture DefaultSilentOcr = new(HotkeyModifiers.Alt | HotkeyModifiers.Shift, 0x53); // Alt + Shift + S
+    public static readonly HotkeyGesture DefaultSelectionTranslate = new(HotkeyModifiers.Alt, 0x45); // Alt + E
+    public static readonly HotkeyGesture DefaultScreenshotTranslate = new(HotkeyModifiers.Alt, 0x57); // Alt + W
+    public static readonly HotkeyGesture DefaultSelectionPolish = new(HotkeyModifiers.Alt, 0x51); // Alt + Q
+    public static readonly HotkeyGesture DefaultSilentOcr = new(HotkeyModifiers.Alt | HotkeyModifiers.Shift, 0x57); // Alt + Shift + W
+    public static readonly HotkeyGesture DefaultReplaceTranslate = new(HotkeyModifiers.Alt, 0x52); // Alt + R
 
     public HotkeyGesture SelectionTranslate { get; set; } = DefaultSelectionTranslate;
-
-    public HotkeyGesture InputTranslate { get; set; } = DefaultInputTranslate;
 
     public HotkeyGesture ScreenshotTranslate { get; set; } = DefaultScreenshotTranslate;
 
@@ -95,15 +93,17 @@ public sealed class HotkeyConfig
 
     public HotkeyGesture SilentOcr { get; set; } = DefaultSilentOcr;
 
+    public HotkeyGesture ReplaceTranslate { get; set; } = DefaultReplaceTranslate;
+
     public bool EnableDoubleTapCopy { get; set; } = false;
 
     public HotkeyConfig Clone() => new()
     {
         SelectionTranslate = SelectionTranslate ?? DefaultSelectionTranslate,
-        InputTranslate = InputTranslate ?? DefaultInputTranslate,
         ScreenshotTranslate = ScreenshotTranslate ?? DefaultScreenshotTranslate,
         SelectionPolish = SelectionPolish ?? DefaultSelectionPolish,
         SilentOcr = SilentOcr ?? DefaultSilentOcr,
+        ReplaceTranslate = ReplaceTranslate ?? DefaultReplaceTranslate,
         EnableDoubleTapCopy = EnableDoubleTapCopy,
     };
 }

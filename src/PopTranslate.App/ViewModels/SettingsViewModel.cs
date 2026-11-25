@@ -41,6 +41,9 @@ public sealed partial class SettingsViewModel : ObservableObject
                 General.SyncStandardStartupFromExternal(false);
             }
         };
+
+        General.HoverIconToggled += (_, enabled) => Hotkeys.SyncHoverIconFromExternal(enabled);
+        Hotkeys.HoverIconToggled += (_, enabled) => General.SyncHoverIconFromExternal(enabled);
     }
 
     public event EventHandler? RestartAsAdministratorRequested;

@@ -433,55 +433,123 @@ public static partial class OpenAiStreamHelper
                     var sawFinishReason = false;
                     string? streamError = null;
 
-                    while (true)
+                    var lineCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    try
                     {
-                        var currentIdleTimeout = isCurrentlyReasoning ? reasoningIdle : normalIdle;
-                        using var lineCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                        lineCts.CancelAfter(currentIdleTimeout);
+                        while (true)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
 
-                        string? line;
-                        try
-                        {
-                            line = await reader.ReadLineAsync(lineCts.Token).ConfigureAwait(false);
-                        }
-                        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                        {
-                            throw;
-                        }
-                        catch (OperationCanceledException)
-                        {
-                            streamError = $"Stream timed out after {(int)currentIdleTimeout.TotalSeconds}s without data.";
-                            break;
-                        }
-                        catch (IOException ex)
-                        {
-                            streamError = $"Connection interrupted while reading stream: {ex.Message}";
-                            break;
-                        }
-                        catch (Exception ex)
-                        {
-                            streamError = $"Error while reading stream: {ex.Message}";
-                            break;
-                        }
-
-                        if (line is null)
-                        {
-                            if (!isFallbackJson && eventDataBuffer.Length > 0)
+                            var currentIdleTimeout = isCurrentlyReasoning ? reasoningIdle : normalIdle;
+                            if (lineCts.IsCancellationRequested)
                             {
-                                var trailingData = eventDataBuffer.ToString();
-                                eventDataBuffer.Clear();
-                                if (string.Equals(trailingData.Trim(), "[DONE]", StringComparison.Ordinal))
+                                // Rare race: idle timer fired right after the previous ReadLineAsync returned
+                                // and before CancelAfter(Timeout.InfiniteTimeSpan) disarmed it.
+                                lineCts.Dispose();
+                                lineCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                            }
+
+                            lineCts.CancelAfter(currentIdleTimeout);
+
+                            string? line;
+                            try
+                            {
+                                line = await reader.ReadLineAsync(lineCts.Token).ConfigureAwait(false);
+                            }
+                            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                            {
+                                throw;
+                            }
+                            catch (OperationCanceledException)
+                            {
+                                streamError = $"Stream timed out after {(int)currentIdleTimeout.TotalSeconds}s without data.";
+                                break;
+                            }
+                            catch (IOException ex)
+                            {
+                                streamError = $"Connection interrupted while reading stream: {ex.Message}";
+                                break;
+                            }
+                            catch (Exception ex)
+                            {
+                                streamError = $"Error while reading stream: {ex.Message}";
+                                break;
+                            }
+
+                            // Disarm the idle timer while parsing/yielding so consumer backpressure
+                            // does not trigger a false stream timeout.
+                            lineCts.CancelAfter(Timeout.InfiniteTimeSpan);
+
+                            if (line is null)
+                            {
+                                if (!isFallbackJson && eventDataBuffer.Length > 0)
                                 {
-                                    sawDone = true;
+                                    var trailingData = eventDataBuffer.ToString();
+                                    eventDataBuffer.Clear();
+                                    if (IsSseDoneToken(trailingData.AsSpan()))
+                                    {
+                                        sawDone = true;
+                                    }
+                                    else
+                                    {
+                                        var status = TryParseSseFrame(trailingData.AsMemory(), out var delta, out var hasReasoningDelta, out var hasFinish, out var frameErr);
+                                        if (status == SseFrameStatus.ApiError)
+                                        {
+                                            streamError = frameErr;
+                                        }
+                                        else if (status == SseFrameStatus.Valid)
+                                        {
+                                            if (hasFinish)
+                                            {
+                                                sawFinishReason = true;
+                                            }
+
+                                            foreach (var item in ProcessFrameDelta(
+                                                delta,
+                                                hasReasoningDelta,
+                                                sseThinkFilter,
+                                                detectedLanguage,
+                                                ref isCurrentlyReasoning,
+                                                ref emittedReasoningHeartbeat,
+                                                ref hasEmittedVisibleContent))
+                                            {
+                                                yield return item;
+                                            }
+                                        }
+                                    }
                                 }
-                                else
+
+                                break;
+                            }
+
+                            if (isFallbackJson)
+                            {
+                                fallbackJsonBuffer.AppendLine(line);
+                                continue;
+                            }
+
+                            // Blank line dispatches any buffered multi-line SSE event.
+                            if (string.IsNullOrWhiteSpace(line))
+                            {
+                                if (eventDataBuffer.Length > 0)
                                 {
-                                    var status = TryParseSseFrame(trailingData, out var delta, out var hasReasoningDelta, out var hasFinish, out var frameErr);
+                                    var bufferedData = eventDataBuffer.ToString();
+                                    eventDataBuffer.Clear();
+
+                                    if (IsSseDoneToken(bufferedData.AsSpan()))
+                                    {
+                                        sawDone = true;
+                                        break;
+                                    }
+
+                                    var status = TryParseSseFrame(bufferedData.AsMemory(), out var delta, out var hasReasoningDelta, out var hasFinish, out var frameErr);
                                     if (status == SseFrameStatus.ApiError)
                                     {
                                         streamError = frameErr;
+                                        break;
                                     }
-                                    else if (status == SseFrameStatus.Valid)
+
+                                    if (status == SseFrameStatus.Valid)
                                     {
                                         if (hasFinish)
                                         {
@@ -501,147 +569,125 @@ public static partial class OpenAiStreamHelper
                                         }
                                     }
                                 }
-                            }
 
-                            break;
-                        }
-
-                        if (isFallbackJson)
-                        {
-                            fallbackJsonBuffer.AppendLine(line);
-                            continue;
-                        }
-
-                        // Blank line dispatches any buffered multi-line SSE event.
-                        if (string.IsNullOrWhiteSpace(line))
-                        {
-                            if (eventDataBuffer.Length > 0)
-                            {
-                                var bufferedData = eventDataBuffer.ToString();
-                                eventDataBuffer.Clear();
-
-                                if (string.Equals(bufferedData.Trim(), "[DONE]", StringComparison.Ordinal))
-                                {
-                                    sawDone = true;
-                                    break;
-                                }
-
-                                var status = TryParseSseFrame(bufferedData, out var delta, out var hasReasoningDelta, out var hasFinish, out var frameErr);
-                                if (status == SseFrameStatus.ApiError)
-                                {
-                                    streamError = frameErr;
-                                    break;
-                                }
-
-                                if (status == SseFrameStatus.Valid)
-                                {
-                                    if (hasFinish)
-                                    {
-                                        sawFinishReason = true;
-                                    }
-
-                                    foreach (var item in ProcessFrameDelta(
-                                        delta,
-                                        hasReasoningDelta,
-                                        sseThinkFilter,
-                                        detectedLanguage,
-                                        ref isCurrentlyReasoning,
-                                        ref emittedReasoningHeartbeat,
-                                        ref hasEmittedVisibleContent))
-                                    {
-                                        yield return item;
-                                    }
-                                }
-                            }
-
-                            continue;
-                        }
-
-                        if (line.StartsWith(':'))
-                        {
-                            continue;
-                        }
-
-                        if (!firstNonEmptyHandled)
-                        {
-                            firstNonEmptyHandled = true;
-                            var trimmedFirst = line.TrimStart();
-                            if (trimmedFirst.StartsWith('{'))
-                            {
-                                isFallbackJson = true;
-                                fallbackJsonBuffer.AppendLine(line);
                                 continue;
                             }
+
+                            if (line.StartsWith(':'))
+                            {
+                                continue;
+                            }
+
+                            if (!firstNonEmptyHandled)
+                            {
+                                firstNonEmptyHandled = true;
+                                if (StartsWithJsonObject(line))
+                                {
+                                    isFallbackJson = true;
+                                    fallbackJsonBuffer.AppendLine(line);
+                                    continue;
+                                }
+                            }
+
+                            if (!TryExtractSseDataOffset(line, out var dataOffset))
+                            {
+                                continue;
+                            }
+
+                            if (eventDataBuffer.Length == 0 && IsSseDoneToken(line.AsSpan(dataOffset)))
+                            {
+                                sawDone = true;
+                                break;
+                            }
+
+                            string frameDelta;
+                            bool frameReasoning;
+                            bool frameFinishReason;
+                            string? apiFrameError;
+
+                            if (eventDataBuffer.Length == 0)
+                            {
+                                if (line.AsSpan(dataOffset).IsWhiteSpace())
+                                {
+                                    continue;
+                                }
+
+                                var frameStatus = TryParseSseFrame(
+                                    line.AsMemory(dataOffset),
+                                    out frameDelta,
+                                    out frameReasoning,
+                                    out frameFinishReason,
+                                    out apiFrameError);
+
+                                if (frameStatus == SseFrameStatus.ApiError)
+                                {
+                                    streamError = apiFrameError;
+                                    break;
+                                }
+
+                                if (frameStatus == SseFrameStatus.IncompleteOrInvalidJson)
+                                {
+                                    // Wait for subsequent `data:` lines in the same multi-line SSE frame.
+                                    eventDataBuffer.Append(line.AsSpan(dataOffset));
+                                    continue;
+                                }
+                            }
+                            else
+                            {
+                                eventDataBuffer.Append('\n');
+                                eventDataBuffer.Append(line.AsSpan(dataOffset));
+
+                                var candidatePayload = eventDataBuffer.ToString();
+                                if (string.IsNullOrWhiteSpace(candidatePayload))
+                                {
+                                    eventDataBuffer.Clear();
+                                    continue;
+                                }
+
+                                var frameStatus = TryParseSseFrame(
+                                    candidatePayload.AsMemory(),
+                                    out frameDelta,
+                                    out frameReasoning,
+                                    out frameFinishReason,
+                                    out apiFrameError);
+
+                                if (frameStatus == SseFrameStatus.ApiError)
+                                {
+                                    eventDataBuffer.Clear();
+                                    streamError = apiFrameError;
+                                    break;
+                                }
+
+                                if (frameStatus == SseFrameStatus.IncompleteOrInvalidJson)
+                                {
+                                    // Wait for subsequent `data:` lines in the same multi-line SSE frame.
+                                    continue;
+                                }
+
+                                eventDataBuffer.Clear();
+                            }
+
+                            if (frameFinishReason)
+                            {
+                                sawFinishReason = true;
+                            }
+
+                            foreach (var item in ProcessFrameDelta(
+                                frameDelta,
+                                frameReasoning,
+                                sseThinkFilter,
+                                detectedLanguage,
+                                ref isCurrentlyReasoning,
+                                ref emittedReasoningHeartbeat,
+                                ref hasEmittedVisibleContent))
+                            {
+                                yield return item;
+                            }
                         }
-
-                        if (!line.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
-                        {
-                            continue;
-                        }
-
-                        var rawDataPart = line["data:".Length..];
-                        if (rawDataPart.StartsWith(' '))
-                        {
-                            rawDataPart = rawDataPart[1..];
-                        }
-
-                        if (eventDataBuffer.Length == 0 && string.Equals(rawDataPart.Trim(), "[DONE]", StringComparison.Ordinal))
-                        {
-                            sawDone = true;
-                            break;
-                        }
-
-                        if (eventDataBuffer.Length > 0)
-                        {
-                            eventDataBuffer.Append('\n');
-                        }
-
-                        eventDataBuffer.Append(rawDataPart);
-
-                        var candidatePayload = eventDataBuffer.ToString();
-                        if (string.IsNullOrWhiteSpace(candidatePayload))
-                        {
-                            eventDataBuffer.Clear();
-                            continue;
-                        }
-
-                        var frameStatus = TryParseSseFrame(
-                            candidatePayload,
-                            out var frameDelta,
-                            out var frameReasoning,
-                            out var frameFinishReason,
-                            out var apiFrameError);
-
-                        if (frameStatus == SseFrameStatus.ApiError)
-                        {
-                            eventDataBuffer.Clear();
-                            streamError = apiFrameError;
-                            break;
-                        }
-
-                        if (frameStatus == SseFrameStatus.IncompleteOrInvalidJson)
-                        {
-                            // Wait for subsequent `data:` lines in the same multi-line SSE frame.
-                            continue;
-                        }
-
-                        eventDataBuffer.Clear();
-                        if (frameFinishReason)
-                        {
-                            sawFinishReason = true;
-                        }
-
-                        foreach (var item in ProcessFrameDelta(
-                            frameDelta,
-                            frameReasoning,
-                            sseThinkFilter,
-                            detectedLanguage,
-                            ref isCurrentlyReasoning,
-                            ref emittedReasoningHeartbeat,
-                            ref hasEmittedVisibleContent))
-                        {
-                            yield return item;
-                        }
+                    }
+                    finally
+                    {
+                        lineCts.Dispose();
                     }
 
                     if (streamError is not null)
@@ -861,8 +907,35 @@ public static partial class OpenAiStreamHelper
         IncompleteOrInvalidJson = 2,
     }
 
+    private static bool StartsWithJsonObject(string line)
+    {
+        var trimmed = line.AsSpan().TrimStart();
+        return !trimmed.IsEmpty && trimmed[0] == '{';
+    }
+
+    private static bool TryExtractSseDataOffset(string line, out int dataOffset)
+    {
+        var span = line.AsSpan();
+        if (!span.StartsWith("data:".AsSpan(), StringComparison.OrdinalIgnoreCase))
+        {
+            dataOffset = 0;
+            return false;
+        }
+
+        dataOffset = "data:".Length;
+        if (dataOffset < span.Length && span[dataOffset] == ' ')
+        {
+            dataOffset++;
+        }
+
+        return true;
+    }
+
+    private static bool IsSseDoneToken(ReadOnlySpan<char> payload) =>
+        payload.Trim().Equals("[DONE]".AsSpan(), StringComparison.Ordinal);
+
     private static SseFrameStatus TryParseSseFrame(
-        string jsonPayload,
+        ReadOnlyMemory<char> jsonPayload,
         out string delta,
         out bool hasReasoningDelta,
         out bool hasFinishReason,

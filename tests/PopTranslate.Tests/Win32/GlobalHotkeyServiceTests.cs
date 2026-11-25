@@ -39,20 +39,22 @@ public sealed class GlobalHotkeyServiceTests
         var config = new HotkeyConfig
         {
             SelectionTranslate = new HotkeyGesture(HotkeyModifiers.Control | HotkeyModifiers.Alt | HotkeyModifiers.Shift, VkF11),
-            InputTranslate = HotkeyGesture.Empty,
             ScreenshotTranslate = HotkeyGesture.Empty,
             SelectionPolish = HotkeyGesture.Empty,
             SilentOcr = HotkeyGesture.Empty,
+            ReplaceTranslate = HotkeyGesture.Empty,
         };
 
         var results = service.ApplyHotkeys(config);
 
         Assert.Equal(5, results.Count);
+        Assert.DoesNotContain("InputTranslate", Enum.GetNames<HotkeyAction>());
         Assert.True(results[HotkeyAction.SelectionTranslate].Succeeded, results[HotkeyAction.SelectionTranslate].ErrorMessage);
-        Assert.True(results[HotkeyAction.InputTranslate].Succeeded);
         Assert.True(results[HotkeyAction.ScreenshotTranslate].Succeeded);
         Assert.True(results[HotkeyAction.SelectionPolish].Succeeded);
         Assert.True(results[HotkeyAction.SilentOcr].Succeeded);
+        Assert.True(results[HotkeyAction.ReplaceTranslate].Succeeded);
+        Assert.Equal("替换翻译", GlobalHotkeyService.FormatActionDisplayName(HotkeyAction.ReplaceTranslate));
 
         service.UnregisterAll();
 
@@ -71,10 +73,10 @@ public sealed class GlobalHotkeyServiceTests
         var config = new HotkeyConfig
         {
             SelectionTranslate = HotkeyGesture.Empty,
-            InputTranslate = HotkeyGesture.Empty,
             ScreenshotTranslate = HotkeyGesture.Empty,
             SelectionPolish = polishGesture,
             SilentOcr = HotkeyGesture.Empty,
+            ReplaceTranslate = HotkeyGesture.Empty,
         };
 
         var resA = serviceA.ApplyHotkeys(config);
@@ -91,10 +93,10 @@ public sealed class GlobalHotkeyServiceTests
         var duplicateConfig = new HotkeyConfig
         {
             SelectionTranslate = polishGesture,
-            InputTranslate = HotkeyGesture.Empty,
             ScreenshotTranslate = HotkeyGesture.Empty,
             SelectionPolish = polishGesture,
             SilentOcr = HotkeyGesture.Empty,
+            ReplaceTranslate = HotkeyGesture.Empty,
         };
 
         var dupResults = serviceA.ApplyHotkeys(duplicateConfig);
@@ -112,18 +114,18 @@ public sealed class GlobalHotkeyServiceTests
         var config = new HotkeyConfig
         {
             SelectionTranslate = sharedGesture,
-            InputTranslate = sharedGesture,
-            ScreenshotTranslate = HotkeyGesture.Empty,
+            ScreenshotTranslate = sharedGesture,
             SelectionPolish = HotkeyGesture.Empty,
             SilentOcr = HotkeyGesture.Empty,
+            ReplaceTranslate = HotkeyGesture.Empty,
         };
 
         var results = service.ApplyHotkeys(config);
 
         Assert.Equal(5, results.Count);
         Assert.True(results[HotkeyAction.SelectionTranslate].Succeeded, results[HotkeyAction.SelectionTranslate].ErrorMessage);
-        Assert.False(results[HotkeyAction.InputTranslate].Succeeded);
-        Assert.False(string.IsNullOrWhiteSpace(results[HotkeyAction.InputTranslate].ErrorMessage));
+        Assert.False(results[HotkeyAction.ScreenshotTranslate].Succeeded);
+        Assert.False(string.IsNullOrWhiteSpace(results[HotkeyAction.ScreenshotTranslate].ErrorMessage));
     }
 
     [Fact]
@@ -135,10 +137,10 @@ public sealed class GlobalHotkeyServiceTests
         var config = new HotkeyConfig
         {
             SelectionTranslate = gesture,
-            InputTranslate = HotkeyGesture.Empty,
             ScreenshotTranslate = HotkeyGesture.Empty,
             SelectionPolish = HotkeyGesture.Empty,
             SilentOcr = HotkeyGesture.Empty,
+            ReplaceTranslate = HotkeyGesture.Empty,
         };
 
         var resA = serviceA.ApplyHotkeys(config);
@@ -156,10 +158,10 @@ public sealed class GlobalHotkeyServiceTests
         var config = new HotkeyConfig
         {
             SelectionTranslate = gesture,
-            InputTranslate = HotkeyGesture.Empty,
             ScreenshotTranslate = HotkeyGesture.Empty,
             SelectionPolish = HotkeyGesture.Empty,
             SilentOcr = HotkeyGesture.Empty,
+            ReplaceTranslate = HotkeyGesture.Empty,
         };
 
         var service1 = new GlobalHotkeyService();

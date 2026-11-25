@@ -50,7 +50,7 @@ public sealed class DiContainerResolutionTests
             .OrderBy(t => t.Name, StringComparer.Ordinal)
             .ToList();
 
-        Assert.Equal(24, contractInterfaces.Count);
+        Assert.Equal(25, contractInterfaces.Count);
 
         foreach (var contractType in contractInterfaces)
         {
@@ -59,13 +59,14 @@ public sealed class DiContainerResolutionTests
             Assert.IsAssignableFrom(contractType, resolved);
         }
 
-        // Assert exact concrete wiring for every Core & Win32 contract (all 24 contracts).
+        // Assert exact concrete wiring for every Core & Win32 contract (all 25 contracts).
         Assert.IsType<DpapiSecretProtector>(provider.GetRequiredService<ISecretProtector>());
         Assert.IsType<JsonSettingsStore>(provider.GetRequiredService<ISettingsStore>());
         Assert.IsType<ProxyHttpClientFactory>(provider.GetRequiredService<IProxyHttpClientFactory>());
         Assert.IsType<LocalLanguageDetector>(provider.GetRequiredService<ILanguageDetector>());
         Assert.IsType<DualTargetLanguageRouter>(provider.GetRequiredService<ILanguageRouter>());
         Assert.IsType<TextPreprocessor>(provider.GetRequiredService<ITextPreprocessor>());
+        Assert.IsType<SmartInputClassifier>(provider.GetRequiredService<ISmartInputClassifier>());
         Assert.IsType<TranslationOrchestrator>(provider.GetRequiredService<ITranslationOrchestrator>());
         Assert.IsType<BackTranslationService>(provider.GetRequiredService<IBackTranslationService>());
         Assert.IsType<OpenAiModelDiscoveryService>(provider.GetRequiredService<IModelDiscoveryService>());
@@ -1117,10 +1118,10 @@ public sealed class DiContainerResolutionTests
     {
         // Use distinct F13-F17 keys (0x7C-0x80) so this test never collides with parallel unit tests using F9-F12.
         const uint vkF13 = 0x7C;
-        const uint vkF14 = 0x7D;
         const uint vkF15 = 0x7E;
         const uint vkF16 = 0x7F;
         const uint vkF17 = 0x80;
+        const uint vkF18 = 0x81;
         const HotkeyModifiers safeModifiers = HotkeyModifiers.Control | HotkeyModifiers.Alt | HotkeyModifiers.Shift;
 
         var services = new ServiceCollection();
@@ -1139,20 +1140,20 @@ public sealed class DiContainerResolutionTests
         var config = new HotkeyConfig
         {
             SelectionTranslate = new HotkeyGesture(safeModifiers, vkF13),
-            InputTranslate = new HotkeyGesture(safeModifiers, vkF14),
             ScreenshotTranslate = new HotkeyGesture(safeModifiers, vkF15),
             SelectionPolish = new HotkeyGesture(safeModifiers, vkF16),
             SilentOcr = new HotkeyGesture(safeModifiers, vkF17),
+            ReplaceTranslate = new HotkeyGesture(safeModifiers, vkF18),
         };
 
         var results = hotkeyService.ApplyHotkeys(config);
 
         Assert.Equal(5, results.Count);
         Assert.True(results[HotkeyAction.SelectionTranslate].Succeeded, results[HotkeyAction.SelectionTranslate].ErrorMessage);
-        Assert.True(results[HotkeyAction.InputTranslate].Succeeded, results[HotkeyAction.InputTranslate].ErrorMessage);
         Assert.True(results[HotkeyAction.ScreenshotTranslate].Succeeded, results[HotkeyAction.ScreenshotTranslate].ErrorMessage);
         Assert.True(results[HotkeyAction.SelectionPolish].Succeeded, results[HotkeyAction.SelectionPolish].ErrorMessage);
         Assert.True(results[HotkeyAction.SilentOcr].Succeeded, results[HotkeyAction.SilentOcr].ErrorMessage);
+        Assert.True(results[HotkeyAction.ReplaceTranslate].Succeeded, results[HotkeyAction.ReplaceTranslate].ErrorMessage);
 
         // Duplicate SelectionPolish gesture must report internal conflict against SelectionTranslate
         var conflictConfig = config.Clone();
@@ -1226,7 +1227,7 @@ public sealed class DiContainerResolutionTests
         Assert.False(loaded.Polish.ShowDiffByDefault);
         Assert.Equal(PolishConfig.DefaultCustomPrompt, loaded.Polish.CustomPrompt);
         Assert.Equal(HotkeyConfig.DefaultSelectionPolish, loaded.Hotkeys.SelectionPolish);
-        Assert.Equal("Alt + P", loaded.Hotkeys.SelectionPolish.DisplayText);
+        Assert.Equal("Alt + Q", loaded.Hotkeys.SelectionPolish.DisplayText);
 
         // Assert V1 fields preserved and legacy plaintext secret sanitized into DPAPI
         var legacyProvider = Assert.Single(loaded.Providers, p => p.Id == "legacy-openai");

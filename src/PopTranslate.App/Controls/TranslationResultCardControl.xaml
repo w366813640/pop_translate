@@ -136,15 +136,25 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
 
-                    <!-- Left: Badge + Full DisplayName (+ Polish Style Pill) + Muted Latency + Auto-Copied Pill -->
+                    <!-- Left: Badge + Responsive DisplayName (+ Polish Style Pill) + Muted Status + Auto-Copied Pill -->
                     <Grid Grid.Column="0" VerticalAlignment="Center">
                         <!-- Translation Card Header Left -->
-                        <StackPanel
+                        <Grid
+                            x:Name="TranslateHeaderLeftGrid"
                             Visibility="{x:Bind ViewModel.IsTranslateMode, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
-                            Orientation="Horizontal"
-                            Spacing="7"
+                            HorizontalAlignment="Left"
+                            ColumnSpacing="6"
                             VerticalAlignment="Center">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+
                             <Border
+                                Grid.Column="0"
                                 MinWidth="18"
                                 Height="18"
                                 Padding="4,0"
@@ -161,28 +171,35 @@
                             </Border>
 
                             <TextBlock
+                                Grid.Column="1"
                                 FontSize="12.5"
                                 FontWeight="SemiBold"
-                                MaxWidth="220"
                                 TextTrimming="CharacterEllipsis"
                                 VerticalAlignment="Center"
                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                 Text="{x:Bind ViewModel.DisplayName, Mode=OneWay}" />
 
-                            <ProgressRing
-                                Width="12"
-                                Height="12"
-                                VerticalAlignment="Center"
-                                IsActive="{x:Bind ViewModel.IsLoading, Mode=OneWay}"
-                                Visibility="{x:Bind ViewModel.IsLoading, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
+                            <StackPanel
+                                Grid.Column="2"
+                                Orientation="Horizontal"
+                                Spacing="4"
+                                VerticalAlignment="Center">
+                                <ProgressRing
+                                    Width="12"
+                                    Height="12"
+                                    VerticalAlignment="Center"
+                                    IsActive="{x:Bind ViewModel.IsLoading, Mode=OneWay}"
+                                    Visibility="{x:Bind ViewModel.IsLoading, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
 
-                            <TextBlock
-                                FontSize="11"
-                                VerticalAlignment="Center"
-                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                                Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" />
+                                <TextBlock
+                                    FontSize="11"
+                                    VerticalAlignment="Center"
+                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                    Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" />
+                            </StackPanel>
 
                             <Border
+                                Grid.Column="3"
                                 Visibility="{x:Bind ViewModel.IsAutoCopied, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
                                 Background="{ThemeResource PopTranslateAccentSubtleBackgroundBrush}"
                                 CornerRadius="4"
@@ -193,18 +210,37 @@
                                     Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
                                     Text="已自动复制" />
                             </Border>
-                        </StackPanel>
+
+                            <FontIcon
+                                Grid.Column="4"
+                                FontSize="9"
+                                VerticalAlignment="Center"
+                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                Visibility="{x:Bind ViewModel.IsCollapsed, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                                Glyph="{x:Bind ViewModel.ChevronGlyph, Mode=OneWay}" />
+                        </Grid>
 
                         <!-- Polish Card Header Left -->
-                        <StackPanel
+                        <Grid
+                            x:Name="PolishHeaderLeftGrid"
                             Visibility="{x:Bind ViewModel.IsPolishMode, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
-                            Orientation="Horizontal"
-                            Spacing="6"
+                            HorizontalAlignment="Left"
+                            ColumnSpacing="5"
                             VerticalAlignment="Center">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+
                             <Border
+                                Grid.Column="0"
                                 Background="{ThemeResource PopTranslatePolishSubtleBackgroundBrush}"
                                 CornerRadius="4"
-                                Padding="6,2"
+                                Padding="5,2"
                                 VerticalAlignment="Center">
                                 <TextBlock
                                     FontSize="10.5"
@@ -214,17 +250,18 @@
                             </Border>
 
                             <TextBlock
+                                Grid.Column="1"
                                 FontSize="12.5"
                                 FontWeight="SemiBold"
-                                MaxWidth="135"
                                 TextTrimming="CharacterEllipsis"
                                 VerticalAlignment="Center"
                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                 Text="{x:Bind ViewModel.DisplayName, Mode=OneWay}" />
 
                             <Button
+                                Grid.Column="2"
                                 Height="22"
-                                Padding="7,0,6,0"
+                                Padding="6,0,5,0"
                                 Background="{ThemeResource SubtleFillColorSecondaryBrush}"
                                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                                 BorderThickness="1"
@@ -240,7 +277,7 @@
                                         Opening="PolishStyleFlyout_Opening"
                                         Closed="PolishStyleFlyout_Closed" />
                                 </Button.Flyout>
-                                <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                <StackPanel Orientation="Horizontal" Spacing="3" VerticalAlignment="Center">
                                     <TextBlock
                                         FontSize="11"
                                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
@@ -254,20 +291,27 @@
                                 </StackPanel>
                             </Button>
 
-                            <ProgressRing
-                                Width="12"
-                                Height="12"
-                                VerticalAlignment="Center"
-                                IsActive="{x:Bind ViewModel.IsLoading, Mode=OneWay}"
-                                Visibility="{x:Bind ViewModel.IsLoading, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
+                            <StackPanel
+                                Grid.Column="3"
+                                Orientation="Horizontal"
+                                Spacing="4"
+                                VerticalAlignment="Center">
+                                <ProgressRing
+                                    Width="12"
+                                    Height="12"
+                                    VerticalAlignment="Center"
+                                    IsActive="{x:Bind ViewModel.IsLoading, Mode=OneWay}"
+                                    Visibility="{x:Bind ViewModel.IsLoading, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
 
-                            <TextBlock
-                                FontSize="11"
-                                VerticalAlignment="Center"
-                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                                Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" />
+                                <TextBlock
+                                    FontSize="11"
+                                    VerticalAlignment="Center"
+                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                    Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" />
+                            </StackPanel>
 
                             <Border
+                                Grid.Column="4"
                                 Visibility="{x:Bind ViewModel.IsAutoCopied, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
                                 Background="{ThemeResource PopTranslatePolishSubtleBackgroundBrush}"
                                 CornerRadius="4"
@@ -278,18 +322,26 @@
                                     Foreground="{ThemeResource PopTranslatePolishAccentForegroundBrush}"
                                     Text="已自动复制" />
                             </Border>
-                        </StackPanel>
+
+                            <FontIcon
+                                Grid.Column="5"
+                                FontSize="9"
+                                VerticalAlignment="Center"
+                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                Visibility="{x:Bind ViewModel.IsCollapsed, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                                Glyph="{x:Bind ViewModel.ChevronGlyph, Mode=OneWay}" />
+                        </Grid>
                     </Grid>
 
-                    <!-- Right: Compact Controls ONLY (对比 on Polish + 🔊 + 📋) -->
+                    <!-- Right: Compact Controls ONLY (对比 when polish text is ready + 🔊 + 📋) -->
                     <StackPanel
                         Grid.Column="1"
                         Orientation="Horizontal"
                         Spacing="2"
                         VerticalAlignment="Center">
-                        <!-- Polish Local Diff Subtle Tinted Ghost Toggle Button (NO Solid ToggleButton!) -->
+                        <!-- Polish Local Diff Subtle Tinted Ghost Toggle Button (Shown once polish text arrives to avoid crowding loading status) -->
                         <Button
-                            Visibility="{x:Bind ViewModel.IsPolishMode, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                            Visibility="{x:Bind ViewModel.CanToggleDiff, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
                             Height="26"
                             Padding="0"
                             Background="Transparent"

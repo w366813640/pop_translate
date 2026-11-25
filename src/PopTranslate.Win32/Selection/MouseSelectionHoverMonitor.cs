@@ -59,6 +59,9 @@ public sealed class MouseSelectionHoverMonitor : ISelectionHoverMonitor
 
     private volatile SelectionConfig _config = new();
     private volatile bool _doubleTapCopyEnabled;
+    private volatile bool _isHoverIconVisible;
+    private volatile bool _hasPendingValidation;
+    private long _validationGeneration;
     private volatile bool _isVkCDown;
     private Channel<HookEvent>? _eventChannel;
     private CancellationTokenSource? _consumerCts;
@@ -83,6 +86,8 @@ public sealed class MouseSelectionHoverMonitor : ISelectionHoverMonitor
 
     public bool IsRunning => _isRunning;
 
+    public bool IsHoverIconVisible => _isHoverIconVisible;
+
     public event EventHandler<HoverSelectionEventArgs>? SelectionDetected;
 
     public event EventHandler? DismissRequested;
@@ -92,6 +97,11 @@ public sealed class MouseSelectionHoverMonitor : ISelectionHoverMonitor
     public void SetDoubleTapCopyEnabled(bool enabled)
     {
         _doubleTapCopyEnabled = enabled;
+    }
+
+    public void SetHoverIconVisible(bool isVisible)
+    {
+        _isHoverIconVisible = isVisible;
     }
 
     public static bool IsDragSelectionGesture(
@@ -174,6 +184,7 @@ public sealed class MouseSelectionHoverMonitor : ISelectionHoverMonitor
             }
 
             _isVkCDown = false;
+            _hasPendingValidation = false;
             _eventChannel = Channel.CreateUnbounded<HookEvent>(new UnboundedChannelOptions
             {
                 SingleReader = true,
@@ -229,6 +240,7 @@ public sealed class MouseSelectionHoverMonitor : ISelectionHoverMonitor
 
             _isRunning = false;
             _isVkCDown = false;
+            _hasPendingValidation = false;
             threadToJoin = _hookThread;
             nativeThreadId = _hookThreadNativeId;
             _hookThread = null;
@@ -438,6 +450,16 @@ public sealed class MouseSelectionHoverMonitor : ISelectionHoverMonitor
     {
         if (nCode >= 0)
         {
+            if (!_doubleTapCopyEnabled && !_isHoverIconVisible && !_hasPendingValidation)
+            {
+                if (_isVkCDown)
+                {
+                    _isVkCDown = false;
+                }
+
+                return PInvoke.CallNextHookEx(HHOOK.Null, nCode, wParam, lParam);
+            }
+
             var msg = (uint)wParam.Value;
             var info = (KBDLLHOOKSTRUCT*)lParam.Value;
             if (info is not null && ((uint)info->flags & LlkhfInjected) == 0)
@@ -540,27 +562,50 @@ public sealed class MouseSelectionHoverMonitor : ISelectionHoverMonitor
                         }
 
                         var currentConfig = _config;
-                        var dpiScale = Math.Max(1.0, _windowHelper.GetMonitorAtPoint(upPoint).DpiScale);
-                        var scaledMinDragPx = Math.Max(4, (int)Math.Round(currentConfig.MinDragDistancePixels * dpiScale));
-                        var scaledDoubleClickRadiusPx = Math.Max(DoubleClickRadiusPx, (int)Math.Round(DoubleClickRadiusPx * dpiScale));
+                        double dpiScale = 0;
 
-                        var isDrag = hasActiveDown && IsDragSelectionGesture(
-                            downPoint,
-                            downTimestampMs,
-                            upPoint,
-                            evt.TimestampMs,
-                            scaledMinDragPx);
+                        var isDrag = false;
+                        if (hasActiveDown && IsDragSelectionGesture(
+                                downPoint,
+                                downTimestampMs,
+                                upPoint,
+                                evt.TimestampMs,
+                                currentConfig.MinDragDistancePixels))
+                        {
+                            dpiScale = Math.Max(1.0, _windowHelper.GetMonitorAtPoint(upPoint).DpiScale);
+                            var scaledMinDragPx = Math.Max(4, (int)Math.Round(currentConfig.MinDragDistancePixels * dpiScale));
+                            isDrag = IsDragSelectionGesture(
+                                downPoint,
+                                downTimestampMs,
+                                upPoint,
+                                evt.TimestampMs,
+                                scaledMinDragPx);
+                        }
 
                         hasActiveDown = false;
 
-                        var doubleClickTime = (int)PInvoke.GetDoubleClickTime();
-                        var isMultiClick = !isDrag && IsDoubleClickSelectionGesture(
-                            lastClickPoint,
-                            lastClickTimestampMs,
-                            upPoint,
-                            evt.TimestampMs,
-                            doubleClickTime,
-                            scaledDoubleClickRadiusPx);
+                        var isMultiClick = false;
+                        if (!isDrag && lastClickTimestampMs > 0)
+                        {
+                            var doubleClickTime = (int)PInvoke.GetDoubleClickTime();
+                            var deltaMs = evt.TimestampMs - lastClickTimestampMs;
+                            if (deltaMs >= 0 && deltaMs <= Math.Max(150, doubleClickTime))
+                            {
+                                if (dpiScale <= 0)
+                                {
+                                    dpiScale = Math.Max(1.0, _windowHelper.GetMonitorAtPoint(upPoint).DpiScale);
+                                }
+
+                                var scaledDoubleClickRadiusPx = Math.Max(DoubleClickRadiusPx, (int)Math.Round(DoubleClickRadiusPx * dpiScale));
+                                isMultiClick = IsDoubleClickSelectionGesture(
+                                    lastClickPoint,
+                                    lastClickTimestampMs,
+                                    upPoint,
+                                    evt.TimestampMs,
+                                    doubleClickTime,
+                                    scaledDoubleClickRadiusPx);
+                            }
+                        }
 
                         if (isDrag || isMultiClick)
                         {
@@ -581,9 +626,11 @@ public sealed class MouseSelectionHoverMonitor : ISelectionHoverMonitor
                             {
                                 CancelPendingValidation(ref pendingValidationCts);
                                 pendingValidationCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                                var validationId = Interlocked.Increment(ref _validationGeneration);
+                                _hasPendingValidation = true;
                                 var validationToken = pendingValidationCts.Token;
                                 _ = Task.Run(
-                                    () => ValidateAndRaiseHoverSelectionAsync(upPoint, currentConfig, validationToken),
+                                    () => ValidateAndRaiseHoverSelectionAsync(upPoint, currentConfig, validationId, validationToken),
                                     CancellationToken.None);
                             }
                         }
@@ -591,7 +638,8 @@ public sealed class MouseSelectionHoverMonitor : ISelectionHoverMonitor
                         {
                             lastClickPoint = upPoint;
                             lastClickTimestampMs = evt.TimestampMs;
-                            RaiseDismissRequested();
+                            var hadPending = CancelPendingValidation(ref pendingValidationCts);
+                            RaiseDismissRequestedIfNeeded(hadPending);
                         }
 
                         break;
@@ -606,8 +654,8 @@ public sealed class MouseSelectionHoverMonitor : ISelectionHoverMonitor
                         var rootHwnd = GetRootWindowAtPoint(point);
                         if (!IsWindowIgnored(rootHwnd))
                         {
-                            CancelPendingValidation(ref pendingValidationCts);
-                            RaiseDismissRequested();
+                            var hadPending = CancelPendingValidation(ref pendingValidationCts);
+                            RaiseDismissRequestedIfNeeded(hadPending);
                         }
 
                         break;
@@ -627,8 +675,8 @@ public sealed class MouseSelectionHoverMonitor : ISelectionHoverMonitor
                                 IsDoubleTapCopyInterval(lastCtrlCTimestampMs, evt.TimestampMs))
                             {
                                 lastCtrlCTimestampMs = 0;
-                                CancelPendingValidation(ref pendingValidationCts);
-                                RaiseDismissRequested();
+                                var hadPending = CancelPendingValidation(ref pendingValidationCts);
+                                RaiseDismissRequestedIfNeeded(hadPending);
 
                                 if (fgForCopy != nint.Zero && !IsWindowIgnored(fgForCopy))
                                 {
@@ -641,8 +689,8 @@ public sealed class MouseSelectionHoverMonitor : ISelectionHoverMonitor
                             lastCtrlCTimestampMs = evt.TimestampMs;
                             if (!IsWindowIgnored(fgForCopy))
                             {
-                                CancelPendingValidation(ref pendingValidationCts);
-                                RaiseDismissRequested();
+                                var hadPending = CancelPendingValidation(ref pendingValidationCts);
+                                RaiseDismissRequestedIfNeeded(hadPending);
                             }
 
                             break;
@@ -652,16 +700,16 @@ public sealed class MouseSelectionHoverMonitor : ISelectionHoverMonitor
 
                         if (evt.VirtualKey == (uint)VIRTUAL_KEY.VK_ESCAPE)
                         {
-                            CancelPendingValidation(ref pendingValidationCts);
-                            RaiseDismissRequested();
+                            var hadPending = CancelPendingValidation(ref pendingValidationCts);
+                            RaiseDismissRequestedIfNeeded(hadPending);
                             break;
                         }
 
                         var fgHwnd = _windowHelper.GetForegroundWindowHandle();
                         if (!IsWindowIgnored(fgHwnd))
                         {
-                            CancelPendingValidation(ref pendingValidationCts);
-                            RaiseDismissRequested();
+                            var hadPending = CancelPendingValidation(ref pendingValidationCts);
+                            RaiseDismissRequestedIfNeeded(hadPending);
                         }
 
                         break;
@@ -676,12 +724,14 @@ public sealed class MouseSelectionHoverMonitor : ISelectionHoverMonitor
         finally
         {
             CancelPendingValidation(ref pendingValidationCts);
+            _hasPendingValidation = false;
         }
     }
 
     private async Task ValidateAndRaiseHoverSelectionAsync(
         ScreenPoint anchorPoint,
         SelectionConfig config,
+        long validationId,
         CancellationToken cancellationToken)
     {
         try
@@ -746,6 +796,13 @@ public sealed class MouseSelectionHoverMonitor : ISelectionHoverMonitor
         {
             // Never crash the background hover worker.
         }
+        finally
+        {
+            if (Volatile.Read(ref _validationGeneration) == validationId)
+            {
+                _hasPendingValidation = false;
+            }
+        }
     }
 
     private void RaiseSelectionDetected(HoverSelectionEventArgs args)
@@ -757,6 +814,14 @@ public sealed class MouseSelectionHoverMonitor : ISelectionHoverMonitor
         catch
         {
             // Keep monitor resilient against subscriber exceptions.
+        }
+    }
+
+    private void RaiseDismissRequestedIfNeeded(bool hadActiveValidation)
+    {
+        if (_isHoverIconVisible || hadActiveValidation)
+        {
+            RaiseDismissRequested();
         }
     }
 
@@ -793,12 +858,16 @@ public sealed class MouseSelectionHoverMonitor : ISelectionHoverMonitor
         });
     }
 
-    private static void CancelPendingValidation(ref CancellationTokenSource? cts)
+    private bool CancelPendingValidation(ref CancellationTokenSource? cts)
     {
         if (cts is null)
         {
-            return;
+            return false;
         }
+
+        var hadActiveValidation = _hasPendingValidation;
+        Interlocked.Increment(ref _validationGeneration);
+        _hasPendingValidation = false;
 
         try
         {
@@ -809,6 +878,8 @@ public sealed class MouseSelectionHoverMonitor : ISelectionHoverMonitor
             cts.Dispose();
             cts = null;
         }
+
+        return hadActiveValidation;
     }
 
     private static unsafe bool IsCurrentCursorIBeam()

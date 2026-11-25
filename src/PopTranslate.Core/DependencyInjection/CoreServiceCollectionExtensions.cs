@@ -28,6 +28,7 @@ public static class CoreServiceCollectionExtensions
         services.TryAddSingleton<ILanguageDetector, LocalLanguageDetector>();
         services.TryAddSingleton<ILanguageRouter, DualTargetLanguageRouter>();
         services.TryAddSingleton<ITextPreprocessor, TextPreprocessor>();
+        services.TryAddSingleton<ISmartInputClassifier, SmartInputClassifier>();
 
         services.TryAddEnumerable(ServiceDescriptor.Singleton<ITranslationProvider, OpenAiCompatibleTranslationProvider>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<ITranslationProvider, FreeTraditionalTranslationProvider>());

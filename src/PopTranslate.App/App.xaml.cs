@@ -1,4 +1,5 @@
 using PopTranslate.App.Services;
+using PopTranslate.Core.Contracts;
 using PopTranslate.Core.DependencyInjection;
 using PopTranslate.Win32.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection;
@@ -42,6 +43,10 @@ public partial class App : Application
 
         try
         {
+            // Preload persisted user settings & encrypted API keys BEFORE resolving AppCoordinator/ViewModels
+            // so _settingsStore.Current never exposes empty defaults during startup DI construction.
+            await Services.GetRequiredService<ISettingsStore>().LoadAsync();
+
             _coordinator = Services.GetRequiredService<AppCoordinator>();
             await _coordinator.InitializeAsync(DispatcherQueue.GetForCurrentThread(), cliArgs);
         }

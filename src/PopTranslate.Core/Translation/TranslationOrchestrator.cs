@@ -95,6 +95,62 @@ public sealed class TranslationOrchestrator : ITranslationOrchestrator
             Results: results);
     }
 
+    public async Task<TranslationResult> TranslateFirstAvailableAsync(
+        TranslationRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var prepared = PrepareExecution(request);
+        if (prepared.SelectedProviders.Count == 0)
+        {
+            return new TranslationResult(
+                ProviderInstanceId: string.Empty,
+                ProviderDisplayName: "PopTranslate",
+                ProviderKind: ProviderKind.FreeTraditional,
+                TranslatedText: string.Empty,
+                DetectedSourceLanguage: prepared.Routing.DetectedSourceLanguage.IsAuto ? null : prepared.Routing.DetectedSourceLanguage,
+                TargetLanguage: prepared.Routing.TargetLanguage,
+                IsSuccess: false,
+                ErrorMessage: "未启用任何翻译服务，请在「设置 -> 翻译与大模型」中启用至少一个翻译服务。",
+                Elapsed: TimeSpan.Zero);
+        }
+
+        TranslationResult? primaryFailure = null;
+        foreach (var candidate in prepared.SelectedProviders)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var singleBatch = await TranslateAllAsync(
+                request with { ProviderInstanceIds = [candidate.Id] },
+                cancellationToken).ConfigureAwait(false);
+
+            var singleResult = singleBatch.Results.FirstOrDefault();
+            if (singleResult is null)
+            {
+                continue;
+            }
+
+            if (singleResult.IsSuccess && !string.IsNullOrWhiteSpace(singleResult.TranslatedText))
+            {
+                return singleResult;
+            }
+
+            primaryFailure ??= singleResult;
+        }
+
+        return primaryFailure ?? new TranslationResult(
+            ProviderInstanceId: prepared.SelectedProviders[0].Id,
+            ProviderDisplayName: prepared.SelectedProviders[0].DisplayName,
+            ProviderKind: prepared.SelectedProviders[0].Kind,
+            TranslatedText: string.Empty,
+            DetectedSourceLanguage: prepared.Routing.DetectedSourceLanguage.IsAuto ? null : prepared.Routing.DetectedSourceLanguage,
+            TargetLanguage: prepared.Routing.TargetLanguage,
+            IsSuccess: false,
+            ErrorMessage: "所有已启用的翻译服务均未返回有效译文。",
+            Elapsed: TimeSpan.Zero);
+    }
+
     public async Task<ProviderHealthCheckResult> TestProviderAsync(
         ProviderInstanceConfig config,
         CancellationToken cancellationToken = default)

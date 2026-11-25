@@ -30,8 +30,8 @@ public sealed partial class HotkeysSettingsPage : Page
     private void SelectionHotkey_GestureChanged(object sender, HotkeyGesture e) =>
         ViewModel.UpdateGesture(HotkeyAction.SelectionTranslate, e);
 
-    private void InputHotkey_GestureChanged(object sender, HotkeyGesture e) =>
-        ViewModel.UpdateGesture(HotkeyAction.InputTranslate, e);
+    private void ReplaceTranslateHotkey_GestureChanged(object sender, HotkeyGesture e) =>
+        ViewModel.UpdateGesture(HotkeyAction.ReplaceTranslate, e);
 
     private void ScreenshotHotkey_GestureChanged(object sender, HotkeyGesture e) =>
         ViewModel.UpdateGesture(HotkeyAction.ScreenshotTranslate, e);

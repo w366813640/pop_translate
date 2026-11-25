@@ -29,6 +29,12 @@ public sealed class AppSettings
 
     public bool EnableCodeIdentifierSplit { get; set; } = true;
 
+    public bool EnableLongTextGuard { get; set; } = true;
+
+    public int LongTextGuardThreshold { get; set; } = 1500;
+
+    public bool EnableSmartInputGuard { get; set; } = true;
+
     public bool AutoBackTranslate { get; set; }
 
     public bool LaunchAtStartup { get; set; }
@@ -59,6 +65,9 @@ public sealed class AppSettings
         MergePdfLineBreaks = true,
         EnableSingleWordDictionary = true,
         EnableCodeIdentifierSplit = true,
+        EnableLongTextGuard = true,
+        LongTextGuardThreshold = 1500,
+        EnableSmartInputGuard = true,
         AutoBackTranslate = false,
         LaunchAtStartup = false,
         UseElevatedStartupTask = false,
@@ -114,6 +123,9 @@ public sealed class AppSettings
         MergePdfLineBreaks = MergePdfLineBreaks,
         EnableSingleWordDictionary = EnableSingleWordDictionary,
         EnableCodeIdentifierSplit = EnableCodeIdentifierSplit,
+        EnableLongTextGuard = EnableLongTextGuard,
+        LongTextGuardThreshold = LongTextGuardThreshold,
+        EnableSmartInputGuard = EnableSmartInputGuard,
         AutoBackTranslate = AutoBackTranslate,
         LaunchAtStartup = LaunchAtStartup,
         UseElevatedStartupTask = UseElevatedStartupTask,

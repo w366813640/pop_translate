@@ -42,10 +42,10 @@ public sealed class GlobalHotkeyService : IGlobalHotkeyService
     public static string FormatActionDisplayName(HotkeyAction action) => action switch
     {
         HotkeyAction.SelectionTranslate => "划词翻译",
-        HotkeyAction.InputTranslate => "输入翻译",
         HotkeyAction.ScreenshotTranslate => "截图翻译",
         HotkeyAction.SelectionPolish => "划词润色",
         HotkeyAction.SilentOcr => "静默截图 OCR",
+        HotkeyAction.ReplaceTranslate => "替换翻译",
         _ => action.ToString(),
     };
 
@@ -299,10 +299,10 @@ public sealed class GlobalHotkeyService : IGlobalHotkeyService
         var seenGestures = new Dictionary<(HotkeyModifiers, uint), HotkeyAction>();
 
         RegisterSingle(HotkeyAction.SelectionTranslate, config.SelectionTranslate, 1, seenGestures, results);
-        RegisterSingle(HotkeyAction.InputTranslate, config.InputTranslate, 2, seenGestures, results);
         RegisterSingle(HotkeyAction.ScreenshotTranslate, config.ScreenshotTranslate, 3, seenGestures, results);
         RegisterSingle(HotkeyAction.SelectionPolish, config.SelectionPolish, 4, seenGestures, results);
         RegisterSingle(HotkeyAction.SilentOcr, config.SilentOcr, 5, seenGestures, results);
+        RegisterSingle(HotkeyAction.ReplaceTranslate, config.ReplaceTranslate, 6, seenGestures, results);
 
         return results;
     }

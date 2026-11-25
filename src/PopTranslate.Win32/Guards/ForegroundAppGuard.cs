@@ -14,6 +14,13 @@ public sealed class ForegroundAppGuard : IForegroundAppGuard
 {
     private const string UwpFrameHostProcessName = "ApplicationFrameHost.exe";
     private const string UwpCoreWindowClassName = "Windows.UI.Core.CoreWindow";
+    private const long ProcessNameCacheTtlMs = 2_000;
+    private const int ProcessNameCacheMaxEntries = 64;
+
+    private readonly object _processNameCacheLock = new();
+    private readonly Dictionary<uint, ProcessNameCacheEntry> _processNameCache = new(ProcessNameCacheMaxEntries);
+
+    private readonly record struct ProcessNameCacheEntry(string? ProcessFileName, long ExpiresAtMs);
 
     private static readonly HashSet<string> ShellDesktopClassNames = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -249,7 +256,76 @@ public sealed class ForegroundAppGuard : IForegroundAppGuard
         return coreWindowChildPid != 0 ? coreWindowChildPid : firstDifferentChildPid;
     }
 
-    private static unsafe string? TryResolveProcessFileName(uint processId)
+    private string? TryResolveProcessFileName(uint processId)
+    {
+        var nowMs = Environment.TickCount64;
+        lock (_processNameCacheLock)
+        {
+            if (_processNameCache.TryGetValue(processId, out var cached))
+            {
+                if (nowMs < cached.ExpiresAtMs)
+                {
+                    return cached.ProcessFileName;
+                }
+
+                _processNameCache.Remove(processId);
+            }
+        }
+
+        var resolved = ResolveProcessFileNameUncached(processId);
+        var storeNowMs = Environment.TickCount64;
+        var expiresAtMs = storeNowMs + ProcessNameCacheTtlMs;
+
+        lock (_processNameCacheLock)
+        {
+            if (!_processNameCache.ContainsKey(processId) && _processNameCache.Count >= ProcessNameCacheMaxEntries)
+            {
+                PruneProcessNameCacheLocked(storeNowMs);
+            }
+
+            _processNameCache[processId] = new ProcessNameCacheEntry(resolved, expiresAtMs);
+        }
+
+        return resolved;
+    }
+
+    private void PruneProcessNameCacheLocked(long nowMs)
+    {
+        Span<uint> expiredKeys = stackalloc uint[ProcessNameCacheMaxEntries];
+        var expiredCount = 0;
+        uint oldestKey = 0;
+        var oldestExpiry = long.MaxValue;
+        var hasOldest = false;
+
+        foreach (var kvp in _processNameCache)
+        {
+            if (nowMs >= kvp.Value.ExpiresAtMs)
+            {
+                if (expiredCount < expiredKeys.Length)
+                {
+                    expiredKeys[expiredCount++] = kvp.Key;
+                }
+            }
+            else if (kvp.Value.ExpiresAtMs < oldestExpiry)
+            {
+                oldestExpiry = kvp.Value.ExpiresAtMs;
+                oldestKey = kvp.Key;
+                hasOldest = true;
+            }
+        }
+
+        for (var i = 0; i < expiredCount; i++)
+        {
+            _processNameCache.Remove(expiredKeys[i]);
+        }
+
+        if (_processNameCache.Count >= ProcessNameCacheMaxEntries && hasOldest)
+        {
+            _processNameCache.Remove(oldestKey);
+        }
+    }
+
+    private static unsafe string? ResolveProcessFileNameUncached(uint processId)
     {
         // PROCESS_QUERY_LIMITED_INFORMATION works across elevation boundaries for reading image paths.
         var processHandle = PInvoke.OpenProcess(

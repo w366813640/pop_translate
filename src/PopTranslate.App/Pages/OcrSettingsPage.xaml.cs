@@ -1,4 +1,5 @@
 using PopTranslate.App.ViewModels;
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Navigation;
 
@@ -20,6 +21,16 @@ public sealed partial class OcrSettingsPage : Page
         {
             ViewModel = vm;
             Bindings.Update();
+        }
+    }
+
+    private void VisionApiKeyBox_PasswordChanged(object sender, RoutedEventArgs e)
+    {
+        if (sender is PasswordBox { IsLoaded: true } box &&
+            ViewModel is not null &&
+            !string.Equals(ViewModel.VisionApiKeyPlaintext, box.Password, StringComparison.Ordinal))
+        {
+            ViewModel.VisionApiKeyPlaintext = box.Password;
         }
     }
 }

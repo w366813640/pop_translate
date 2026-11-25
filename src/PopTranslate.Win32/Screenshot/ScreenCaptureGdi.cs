@@ -10,6 +10,9 @@ namespace PopTranslate.Win32.Screenshot;
 
 public sealed class CapturedMonitorBitmap : IDisposable
 {
+    private readonly object _syncLock = new();
+    private nint _brightBitsPtr;
+    private byte[]? _lazyBrightBgraPixels;
     private bool _disposed;
 
     internal CapturedMonitorBitmap(
@@ -19,10 +22,10 @@ public sealed class CapturedMonitorBitmap : IDisposable
         HDC brightDc,
         HBITMAP brightBitmap,
         HGDIOBJ brightOldObject,
+        nint brightBitsPtr,
         HDC dimmedDc,
         HBITMAP dimmedBitmap,
-        HGDIOBJ dimmedOldObject,
-        byte[] brightBgraPixels)
+        HGDIOBJ dimmedOldObject)
     {
         Monitor = monitor;
         Width = width;
@@ -30,10 +33,10 @@ public sealed class CapturedMonitorBitmap : IDisposable
         BrightDc = brightDc;
         BrightBitmap = brightBitmap;
         BrightOldObject = brightOldObject;
+        _brightBitsPtr = brightBitsPtr;
         DimmedDc = dimmedDc;
         DimmedBitmap = dimmedBitmap;
         DimmedOldObject = dimmedOldObject;
-        BrightBgraPixels = brightBgraPixels;
     }
 
     public MonitorInfo Monitor { get; }
@@ -42,7 +45,29 @@ public sealed class CapturedMonitorBitmap : IDisposable
 
     public int Height { get; }
 
-    public byte[] BrightBgraPixels { get; }
+    public nint BrightBitsPtr => Volatile.Read(ref _brightBitsPtr);
+
+    public byte[] BrightBgraPixels
+    {
+        get
+        {
+            lock (_syncLock)
+            {
+                ObjectDisposedException.ThrowIf(_disposed || _brightBitsPtr == nint.Zero, this);
+
+                if (_lazyBrightBgraPixels is not null)
+                {
+                    return _lazyBrightBgraPixels;
+                }
+
+                var byteCount = checked(Width * Height * 4);
+                var pixels = new byte[byteCount];
+                Marshal.Copy(_brightBitsPtr, pixels, 0, byteCount);
+                _lazyBrightBgraPixels = pixels;
+                return pixels;
+            }
+        }
+    }
 
     internal HDC BrightDc { get; private set; }
 
@@ -56,49 +81,74 @@ public sealed class CapturedMonitorBitmap : IDisposable
 
     internal HGDIOBJ DimmedOldObject { get; private set; }
 
+    internal void ThrowIfDisposed()
+    {
+        lock (_syncLock)
+        {
+            ObjectDisposedException.ThrowIf(_disposed || _brightBitsPtr == nint.Zero, this);
+        }
+    }
+
+    internal unsafe byte[] CropBrightBgra32(ScreenRect cropRect)
+    {
+        lock (_syncLock)
+        {
+            ObjectDisposedException.ThrowIf(_disposed || _brightBitsPtr == nint.Zero, this);
+
+            var byteCount = checked(Width * Height * 4);
+            var sourceSpan = new ReadOnlySpan<byte>((void*)_brightBitsPtr, byteCount);
+            return ScreenCaptureGdi.CropBgra32(sourceSpan, Width, Height, cropRect);
+        }
+    }
+
     public unsafe void Dispose()
     {
-        if (_disposed)
+        lock (_syncLock)
         {
-            return;
-        }
-
-        _disposed = true;
-
-        if (!DimmedDc.IsNull)
-        {
-            if (!DimmedOldObject.IsNull)
+            if (_disposed)
             {
-                PInvoke.SelectObject(DimmedDc, DimmedOldObject);
-                DimmedOldObject = HGDIOBJ.Null;
+                return;
             }
 
-            PInvoke.DeleteDC(DimmedDc);
-            DimmedDc = HDC.Null;
-        }
+            _disposed = true;
+            Volatile.Write(ref _brightBitsPtr, nint.Zero);
+            _lazyBrightBgraPixels = null;
 
-        if (!DimmedBitmap.IsNull)
-        {
-            PInvoke.DeleteObject(new HGDIOBJ(DimmedBitmap.Value));
-            DimmedBitmap = HBITMAP.Null;
-        }
-
-        if (!BrightDc.IsNull)
-        {
-            if (!BrightOldObject.IsNull)
+            if (!DimmedDc.IsNull)
             {
-                PInvoke.SelectObject(BrightDc, BrightOldObject);
-                BrightOldObject = HGDIOBJ.Null;
+                if (!DimmedOldObject.IsNull)
+                {
+                    PInvoke.SelectObject(DimmedDc, DimmedOldObject);
+                    DimmedOldObject = HGDIOBJ.Null;
+                }
+
+                PInvoke.DeleteDC(DimmedDc);
+                DimmedDc = HDC.Null;
             }
 
-            PInvoke.DeleteDC(BrightDc);
-            BrightDc = HDC.Null;
-        }
+            if (!DimmedBitmap.IsNull)
+            {
+                PInvoke.DeleteObject(new HGDIOBJ(DimmedBitmap.Value));
+                DimmedBitmap = HBITMAP.Null;
+            }
 
-        if (!BrightBitmap.IsNull)
-        {
-            PInvoke.DeleteObject(new HGDIOBJ(BrightBitmap.Value));
-            BrightBitmap = HBITMAP.Null;
+            if (!BrightDc.IsNull)
+            {
+                if (!BrightOldObject.IsNull)
+                {
+                    PInvoke.SelectObject(BrightDc, BrightOldObject);
+                    BrightOldObject = HGDIOBJ.Null;
+                }
+
+                PInvoke.DeleteDC(BrightDc);
+                BrightDc = HDC.Null;
+            }
+
+            if (!BrightBitmap.IsNull)
+            {
+                PInvoke.DeleteObject(new HGDIOBJ(BrightBitmap.Value));
+                BrightBitmap = HBITMAP.Null;
+            }
         }
     }
 }
@@ -111,26 +161,49 @@ public static class ScreenCaptureGdi
     {
         ArgumentNullException.ThrowIfNull(monitors);
 
-        var captured = new List<CapturedMonitorBitmap>(monitors.Count);
+        var validMonitors = new List<MonitorInfo>(monitors.Count);
+        foreach (var monitor in monitors)
+        {
+            if (monitor is not null && !monitor.Bounds.IsEmpty)
+            {
+                validMonitors.Add(monitor);
+            }
+        }
+
+        if (validMonitors.Count == 0)
+        {
+            return [];
+        }
+
+        if (validMonitors.Count == 1)
+        {
+            return [CaptureMonitor(validMonitors[0])];
+        }
+
+        var results = new CapturedMonitorBitmap?[validMonitors.Count];
         try
         {
-            foreach (var monitor in monitors)
+            Parallel.For(0, validMonitors.Count, i =>
             {
-                if (monitor.Bounds.IsEmpty)
-                {
-                    continue;
-                }
+                results[i] = CaptureMonitor(validMonitors[i]);
+            });
 
-                captured.Add(CaptureMonitor(monitor));
+            var captured = new List<CapturedMonitorBitmap>(validMonitors.Count);
+            for (var i = 0; i < results.Length; i++)
+            {
+                if (results[i] is { } bitmap)
+                {
+                    captured.Add(bitmap);
+                }
             }
 
             return captured;
         }
         catch
         {
-            foreach (var item in captured)
+            for (var i = 0; i < results.Length; i++)
             {
-                item.Dispose();
+                results[i]?.Dispose();
             }
 
             throw;
@@ -211,9 +284,8 @@ public static class ScreenCaptureGdi
                     ROP_CODE.SRCCOPY);
             }
 
-            var byteCount = checked(width * height * 4);
-            var brightPixels = new byte[byteCount];
-            Marshal.Copy((nint)brightBitsPtr, brightPixels, 0, byteCount);
+            var stride = checked(width * 4);
+            var byteCount = checked(stride * height);
 
             // Create pre-dimmed DIB (~55% brightness) for tear-free 120 FPS overlay WM_PAINT.
             dimmedDc = PInvoke.CreateCompatibleDC(screenDc);
@@ -238,15 +310,7 @@ public static class ScreenCaptureGdi
 
             dimmedOldObj = PInvoke.SelectObject(dimmedDc, new HGDIOBJ(dimmedBitmap.Value));
 
-            var dimmedSpan = new Span<byte>(dimmedBitsPtr, byteCount);
-            for (var i = 0; i < byteCount; i += 4)
-            {
-                brightPixels[i + 3] = 0xFF;
-                dimmedSpan[i] = (byte)(brightPixels[i] * 55 / 100);
-                dimmedSpan[i + 1] = (byte)(brightPixels[i + 1] * 55 / 100);
-                dimmedSpan[i + 2] = (byte)(brightPixels[i + 2] * 55 / 100);
-                dimmedSpan[i + 3] = 0xFF;
-            }
+            DimBrightToDimmed((nint)brightBitsPtr, (nint)dimmedBitsPtr, stride, height, byteCount);
 
             var result = new CapturedMonitorBitmap(
                 monitor,
@@ -255,10 +319,10 @@ public static class ScreenCaptureGdi
                 brightDc,
                 brightBitmap,
                 brightOldObj,
+                (nint)brightBitsPtr,
                 dimmedDc,
                 dimmedBitmap,
-                dimmedOldObj,
-                brightPixels);
+                dimmedOldObj);
 
             // Ownership transferred to CapturedMonitorBitmap.
             brightDc = HDC.Null;
@@ -409,6 +473,7 @@ public static class ScreenCaptureGdi
         bool copyOnly = false)
     {
         ArgumentNullException.ThrowIfNull(monitorBitmap);
+        monitorBitmap.ThrowIfDisposed();
 
         var clamped = NormalizeSelectionRect(
             new ScreenPoint(localSelectionRect.X, localSelectionRect.Y),
@@ -421,11 +486,7 @@ public static class ScreenCaptureGdi
             throw new ArgumentException("Selection rectangle is empty.", nameof(localSelectionRect));
         }
 
-        var croppedBgra = CropBgra32(
-            monitorBitmap.BrightBgraPixels,
-            monitorBitmap.Width,
-            monitorBitmap.Height,
-            clamped);
+        var croppedBgra = monitorBitmap.CropBrightBgra32(clamped);
 
         var pngBytes = await EncodeBgra32ToPngAsync(
                 croppedBgra,
@@ -450,6 +511,64 @@ public static class ScreenCaptureGdi
             PixelHeight: clamped.Height,
             RawBgraBytes: croppedBgra,
             CopyOnly: copyOnly);
+    }
+
+    private static unsafe void DimBrightToDimmed(
+        nint brightBitsPtr,
+        nint dimmedBitsPtr,
+        int stride,
+        int height,
+        int byteCount)
+    {
+        var stripeCount = byteCount >= 65_536
+            ? Math.Clamp(height / 64, 1, Math.Max(1, Environment.ProcessorCount))
+            : 1;
+
+        if (stripeCount <= 1)
+        {
+            DimRows((byte*)brightBitsPtr, (byte*)dimmedBitsPtr, stride, 0, height);
+            return;
+        }
+
+        var rowsPerStripe = (height + stripeCount - 1) / stripeCount;
+        Parallel.For(0, stripeCount, stripe =>
+        {
+            var startRow = stripe * rowsPerStripe;
+            if (startRow >= height)
+            {
+                return;
+            }
+
+            var endRow = Math.Min(height, startRow + rowsPerStripe);
+            DimRows((byte*)brightBitsPtr, (byte*)dimmedBitsPtr, stride, startRow, endRow);
+        });
+    }
+
+    private static unsafe void DimRows(
+        byte* brightBase,
+        byte* dimmedBase,
+        int stride,
+        int startRow,
+        int endRow)
+    {
+        for (var row = startRow; row < endRow; row++)
+        {
+            var offset = (nuint)row * (nuint)stride;
+            var src = brightBase + offset;
+            var dst = dimmedBase + offset;
+            var end = src + stride;
+
+            while (src < end)
+            {
+                dst[0] = (byte)((src[0] * 141) >> 8);
+                dst[1] = (byte)((src[1] * 141) >> 8);
+                dst[2] = (byte)((src[2] * 141) >> 8);
+                dst[3] = 0xFF;
+                src[3] = 0xFF;
+                src += 4;
+                dst += 4;
+            }
+        }
     }
 
     private static unsafe BITMAPINFO CreateTopDownBgra32BitmapInfo(int width, int height)

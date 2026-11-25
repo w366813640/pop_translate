@@ -52,6 +52,7 @@
             IsSettingsVisible="False"
             IsPaneToggleButtonVisible="False"
             OpenPaneLength="204"
+            ItemInvoked="SettingsNavView_ItemInvoked"
             SelectionChanged="SettingsNavView_SelectionChanged">
             <NavigationView.MenuItems>
                 <NavigationViewItem Content="常规" Tag="General">
@@ -80,6 +81,18 @@
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
             </NavigationView.MenuItems>
+
+            <NavigationView.FooterMenuItems>
+                <NavigationViewItem
+                    Content="退出程序"
+                    Tag="Exit"
+                    SelectsOnInvoked="False"
+                    ToolTipService.ToolTip="保存配置并完全退出 PopTranslate">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE7E8;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+            </NavigationView.FooterMenuItems>
 
             <Frame x:Name="ContentFrame" />
         </NavigationView>

@@ -35,7 +35,7 @@
                         <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
                             <TextBlock Text="划词翻译快捷键" FontWeight="SemiBold" />
                             <TextBlock
-                                Text="读取当前选中文本并弹出并发翻译卡片（优先 UIA 无侵扰读取）"
+                                Text="选中文字时直接读取并翻译；未选中文字时呼出弹窗并自动聚焦输入框"
                                 Style="{StaticResource CaptionTextBlockStyle}"
                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                 TextWrapping="Wrap" />
@@ -56,9 +56,9 @@
                             <ColumnDefinition Width="260" />
                         </Grid.ColumnDefinitions>
                         <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
-                            <TextBlock Text="输入翻译快捷键" FontWeight="SemiBold" />
+                            <TextBlock Text="替换翻译快捷键" FontWeight="SemiBold" />
                             <TextBlock
-                                Text="呼出翻译弹窗并自动聚焦输入框，支持直接键入或粘贴翻译"
+                                Text="读取当前输入框内选中的文字，静默调用首选翻译服务并就地替换为译文，不打开弹窗（默认 Alt + R）"
                                 Style="{StaticResource CaptionTextBlockStyle}"
                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                 TextWrapping="Wrap" />
@@ -66,9 +66,9 @@
                         <controls:HotkeyRecorderBox
                             Grid.Column="1"
                             VerticalAlignment="Center"
-                            Gesture="{x:Bind ViewModel.InputTranslateGesture, Mode=OneWay}"
-                            ErrorMessage="{x:Bind ViewModel.InputHotkeyError, Mode=OneWay}"
-                            GestureChanged="InputHotkey_GestureChanged" />
+                            Gesture="{x:Bind ViewModel.ReplaceTranslateGesture, Mode=OneWay}"
+                            ErrorMessage="{x:Bind ViewModel.ReplaceTranslateHotkeyError, Mode=OneWay}"
+                            GestureChanged="ReplaceTranslateHotkey_GestureChanged" />
                     </Grid>
 
                     <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
@@ -104,7 +104,7 @@
                         <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
                             <TextBlock Text="静默截图 OCR (仅复制文字)" FontWeight="SemiBold" />
                             <TextBlock
-                                Text="冻结屏幕框选文字后直接执行 OCR 并写入剪贴板，不弹出翻译卡片（默认 Alt + Shift + S）"
+                                Text="冻结屏幕框选文字后直接执行 OCR 并写入剪贴板，不弹出翻译卡片（默认 Alt + Shift + W）"
                                 Style="{StaticResource CaptionTextBlockStyle}"
                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                 TextWrapping="Wrap" />
@@ -127,7 +127,7 @@
                         <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
                             <TextBlock Text="划词润色快捷键" FontWeight="SemiBold" />
                             <TextBlock
-                                Text="读取当前选中文本并直接以润色模式弹出大模型并发流式润色（默认 Alt + P）"
+                                Text="读取当前选中文本并直接以润色模式弹出大模型并发流式润色（默认 Alt + Q）"
                                 Style="{StaticResource CaptionTextBlockStyle}"
                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                 TextWrapping="Wrap" />

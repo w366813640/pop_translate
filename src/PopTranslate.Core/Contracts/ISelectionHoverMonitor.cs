@@ -18,6 +18,8 @@ public interface ISelectionHoverMonitor : IDisposable
 
     void SetDoubleTapCopyEnabled(bool enabled);
 
+    void SetHoverIconVisible(bool isVisible) { }
+
     void Stop();
 
     void RegisterIgnoredWindow(nint windowHandle);

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using PopTranslate.App.Services;
 using PopTranslate.Core.Contracts;
 using PopTranslate.Core.Models;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -12,6 +13,7 @@ public sealed partial class NetworkSettingsViewModel : ObservableObject
     private readonly ISettingsStore _settingsStore;
     private readonly ISecretProtector _secretProtector;
     private readonly IStartupPrivilegeService _startupPrivilegeService;
+    private CancellationTokenSource? _autoSaveDebounceCts;
     private bool _isLoading;
     private bool _isDirty;
 
@@ -171,6 +173,7 @@ public sealed partial class NetworkSettingsViewModel : ObservableObject
 
     public async Task FlushIfDirtyAsync()
     {
+        CancelAutoSaveDebounce();
         if (!_isDirty || _isLoading)
         {
             return;
@@ -180,8 +183,11 @@ public sealed partial class NetworkSettingsViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private Task SaveProxySettingsAsync() =>
-        SaveProxySettingsCoreAsync("网络代理配置已保存并立即生效。");
+    private Task SaveProxySettingsAsync()
+    {
+        CancelAutoSaveDebounce();
+        return SaveProxySettingsCoreAsync("网络代理配置已保存并立即生效。");
+    }
 
     [RelayCommand]
     private void RestartAsAdministrator()
@@ -194,14 +200,7 @@ public sealed partial class NetworkSettingsViewModel : ObservableObject
     {
         try
         {
-            var baseDir = AppContext.BaseDirectory;
-            var logsDir = File.Exists(Path.Combine(baseDir, "portable"))
-                ? Path.Combine(baseDir, "data", "logs")
-                : Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "PopTranslate",
-                    "logs");
-
+            var logsDir = AppDiagnosticsLogger.LogDirectoryPath;
             Directory.CreateDirectory(logsDir);
             using var _ = Process.Start("explorer.exe", $"\"{logsDir}\"");
         }
@@ -251,6 +250,36 @@ public sealed partial class NetworkSettingsViewModel : ObservableObject
         if (!_isLoading)
         {
             _isDirty = true;
+            CancelAutoSaveDebounce();
+            var cts = new CancellationTokenSource();
+            _autoSaveDebounceCts = cts;
+            _ = PersistDebouncedAsync(cts.Token);
+        }
+    }
+
+    private async Task PersistDebouncedAsync(CancellationToken ct)
+    {
+        try
+        {
+            await Task.Delay(250, ct);
+            if (!ct.IsCancellationRequested && _isDirty)
+            {
+                await SaveProxySettingsCoreAsync(successMessage: null);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Superseded by newer edit or immediate flush.
+        }
+    }
+
+    private void CancelAutoSaveDebounce()
+    {
+        if (_autoSaveDebounceCts is not null)
+        {
+            try { _autoSaveDebounceCts.Cancel(); } catch { }
+            _autoSaveDebounceCts.Dispose();
+            _autoSaveDebounceCts = null;
         }
     }
 
@@ -294,7 +323,7 @@ public sealed partial class NetworkSettingsViewModel : ObservableObject
         IsUpdatingElevatedTask = true;
         try
         {
-            var exePath = Environment.ProcessPath ?? string.Empty;
+            var exePath = AppAssetHelper.ResolveEntryExecutablePath();
             var result = await _startupPrivilegeService.SetElevatedStartupTaskAsync(enabled, exePath);
 
             if (!result.Succeeded)

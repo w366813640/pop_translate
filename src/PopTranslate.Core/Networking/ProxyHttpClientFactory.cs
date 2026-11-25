@@ -97,6 +97,7 @@ public sealed class ProxyHttpClientFactory : IProxyHttpClientFactory, IDisposabl
         var handler = new SocketsHttpHandler
         {
             PooledConnectionLifetime = TimeSpan.FromMinutes(2),
+            PooledConnectionIdleTimeout = TimeSpan.FromSeconds(90),
             ConnectTimeout = DefaultConnectTimeout,
             AutomaticDecompression = DecompressionMethods.All,
         };

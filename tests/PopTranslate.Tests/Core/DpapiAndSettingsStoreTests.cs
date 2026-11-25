@@ -208,7 +208,7 @@ public sealed class DpapiAndSettingsStoreTests : IDisposable
         Assert.NotNull(nullStore.Current.Polish);
         Assert.Equal(PolishConfig.DefaultCustomPrompt, nullStore.Current.Polish.CustomPrompt);
         Assert.Equal(HotkeyConfig.DefaultSelectionTranslate, nullStore.Current.Hotkeys.SelectionTranslate);
-        Assert.Equal(HotkeyConfig.DefaultInputTranslate, nullStore.Current.Hotkeys.InputTranslate);
+        Assert.Equal(HotkeyConfig.DefaultReplaceTranslate, nullStore.Current.Hotkeys.ReplaceTranslate);
         Assert.Equal(HotkeyConfig.DefaultScreenshotTranslate, nullStore.Current.Hotkeys.ScreenshotTranslate);
         Assert.Equal(HotkeyConfig.DefaultSelectionPolish, nullStore.Current.Hotkeys.SelectionPolish);
 

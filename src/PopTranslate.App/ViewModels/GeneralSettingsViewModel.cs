@@ -25,12 +25,22 @@ public sealed partial class GeneralSettingsViewModel : ObservableObject
             LanguageCode.SelectableTargets.Select(l => new LanguageOption(l, l.Label)));
         PolishStyles = new ObservableCollection<PolishStyleOption>(PolishStyleOption.CreatePresets());
 
-        PrimaryTargetLanguage = TargetLanguages.First(x => x.Code == LanguageCode.ChineseSimplified);
-        SecondaryTargetLanguage = TargetLanguages.First(x => x.Code == LanguageCode.English);
-        DefaultPolishStyle = PolishStyles[0];
+        _isLoading = true;
+        try
+        {
+            PrimaryTargetLanguage = TargetLanguages.First(x => x.Code == LanguageCode.ChineseSimplified);
+            SecondaryTargetLanguage = TargetLanguages.First(x => x.Code == LanguageCode.English);
+            DefaultPolishStyle = PolishStyles[0];
+        }
+        finally
+        {
+            _isLoading = false;
+        }
     }
 
     public event EventHandler<bool>? StandardStartupToggled;
+
+    public event EventHandler<bool>? HoverIconToggled;
 
     public ObservableCollection<LanguageOption> TargetLanguages { get; }
 
@@ -55,6 +65,15 @@ public sealed partial class GeneralSettingsViewModel : ObservableObject
     public partial bool EnableCodeIdentifierSplit { get; set; } = true;
 
     [ObservableProperty]
+    public partial bool EnableLongTextGuard { get; set; } = true;
+
+    [ObservableProperty]
+    public partial double LongTextGuardThreshold { get; set; } = 1500;
+
+    [ObservableProperty]
+    public partial bool EnableSmartInputGuard { get; set; } = true;
+
+    [ObservableProperty]
     public partial string GlossaryText { get; set; } = string.Empty;
 
     [ObservableProperty]
@@ -65,6 +84,9 @@ public sealed partial class GeneralSettingsViewModel : ObservableObject
 
     [ObservableProperty]
     public partial string CustomPolishPrompt { get; set; } = PolishConfig.DefaultCustomPrompt;
+
+    [ObservableProperty]
+    public partial bool EnableHoverIcon { get; set; } = true;
 
     [ObservableProperty]
     public partial int PositionModeIndex { get; set; }
@@ -96,6 +118,35 @@ public sealed partial class GeneralSettingsViewModel : ObservableObject
     [ObservableProperty]
     public partial string? StatusMessage { get; set; }
 
+    public string ConfigFilePath => _settingsStore.SettingsFilePath;
+
+    [RelayCommand]
+    private void OpenConfigDirectory()
+    {
+        try
+        {
+            var filePath = _settingsStore.SettingsFilePath;
+            var dirPath = Path.GetDirectoryName(filePath);
+            if (!string.IsNullOrWhiteSpace(dirPath))
+            {
+                Directory.CreateDirectory(dirPath);
+            }
+
+            if (File.Exists(filePath))
+            {
+                using var _ = System.Diagnostics.Process.Start("explorer.exe", $"/select,\"{filePath}\"");
+            }
+            else if (!string.IsNullOrWhiteSpace(dirPath))
+            {
+                using var _ = System.Diagnostics.Process.Start("explorer.exe", $"\"{dirPath}\"");
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"打开配置目录失败：{ex.Message}";
+        }
+    }
+
     public void LoadFrom(AppSettings settings)
     {
         CancelPromptDebounce();
@@ -112,6 +163,9 @@ public sealed partial class GeneralSettingsViewModel : ObservableObject
             AutoBackTranslate = settings.AutoBackTranslate;
             EnableSingleWordDictionary = settings.EnableSingleWordDictionary;
             EnableCodeIdentifierSplit = settings.EnableCodeIdentifierSplit;
+            EnableLongTextGuard = settings.EnableLongTextGuard;
+            LongTextGuardThreshold = Math.Clamp(settings.LongTextGuardThreshold, 300, 20000);
+            EnableSmartInputGuard = settings.EnableSmartInputGuard;
             GlossaryText = FormatGlossaryText(settings.Glossary);
 
             var polish = settings.Polish ?? new PolishConfig();
@@ -122,6 +176,7 @@ public sealed partial class GeneralSettingsViewModel : ObservableObject
                 ? PolishConfig.DefaultCustomPrompt
                 : polish.CustomPrompt;
 
+            EnableHoverIcon = settings.Selection.EnableHoverIcon;
             PositionModeIndex = (int)settings.Window.PositionMode;
             PopupWidth = Math.Clamp(settings.Window.PopupWidth, 340, 760);
             PopupMaxHeight = Math.Clamp(settings.Window.PopupMaxHeight, 300, 1000);
@@ -155,6 +210,19 @@ public sealed partial class GeneralSettingsViewModel : ObservableObject
         try
         {
             LaunchAtStartup = enabled;
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    public void SyncHoverIconFromExternal(bool enabled)
+    {
+        _isLoading = true;
+        try
+        {
+            EnableHoverIcon = enabled;
         }
         finally
         {
@@ -197,8 +265,22 @@ public sealed partial class GeneralSettingsViewModel : ObservableObject
     partial void OnAutoBackTranslateChanged(bool value) => SaveIfReady();
     partial void OnEnableSingleWordDictionaryChanged(bool value) => SaveIfReady();
     partial void OnEnableCodeIdentifierSplitChanged(bool value) => SaveIfReady();
+    partial void OnEnableLongTextGuardChanged(bool value) => SaveIfReady();
+    partial void OnLongTextGuardThresholdChanged(double value) => SaveIfReady();
+    partial void OnEnableSmartInputGuardChanged(bool value) => SaveIfReady();
     partial void OnDefaultPolishStyleChanged(PolishStyleOption value) => SaveIfReady();
     partial void OnShowPolishDiffByDefaultChanged(bool value) => SaveIfReady();
+    partial void OnEnableHoverIconChanged(bool value)
+    {
+        if (_isLoading)
+        {
+            return;
+        }
+
+        HoverIconToggled?.Invoke(this, value);
+        SaveIfReady();
+    }
+
     partial void OnPositionModeIndexChanged(int value) => SaveIfReady();
     partial void OnPopupWidthChanged(double value) => SaveIfReady();
     partial void OnPopupMaxHeightChanged(double value) => SaveIfReady();
@@ -221,7 +303,7 @@ public sealed partial class GeneralSettingsViewModel : ObservableObject
 
         try
         {
-            var exePath = Environment.ProcessPath ?? string.Empty;
+            var exePath = Services.AppAssetHelper.ResolveEntryExecutablePath();
             if (!string.IsNullOrWhiteSpace(exePath))
             {
                 _startupPrivilegeService.SetStandardStartup(value, exePath);
@@ -319,6 +401,11 @@ public sealed partial class GeneralSettingsViewModel : ObservableObject
             updated.AutoBackTranslate = AutoBackTranslate;
             updated.EnableSingleWordDictionary = EnableSingleWordDictionary;
             updated.EnableCodeIdentifierSplit = EnableCodeIdentifierSplit;
+            updated.EnableLongTextGuard = EnableLongTextGuard;
+            updated.LongTextGuardThreshold = double.IsNaN(LongTextGuardThreshold)
+                ? 1500
+                : (int)Math.Clamp(Math.Round(LongTextGuardThreshold), 300, 20000);
+            updated.EnableSmartInputGuard = EnableSmartInputGuard;
             updated.Glossary = ParseGlossaryText(GlossaryText);
             updated.LaunchAtStartup = LaunchAtStartup;
             if (LaunchAtStartup)
@@ -333,6 +420,7 @@ public sealed partial class GeneralSettingsViewModel : ObservableObject
                 ? PolishConfig.DefaultCustomPrompt
                 : CustomPolishPrompt;
 
+            updated.Selection.EnableHoverIcon = EnableHoverIcon;
             updated.Window.PositionMode = PositionModeIndex == (int)WindowPositionMode.RememberFixedPosition
                 ? WindowPositionMode.RememberFixedPosition
                 : WindowPositionMode.FollowCursor;

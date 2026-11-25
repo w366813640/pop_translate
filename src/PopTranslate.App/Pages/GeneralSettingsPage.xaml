@@ -147,6 +147,61 @@
 
                     <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
 
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="长文本 / 误选 Token 熔断保护" FontWeight="SemiBold" />
+                            <TextBlock
+                                Text="超出字数阈值时先暂停自动请求并弹出确认，避免误选整页日志或长文档消耗大量大模型 Token"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                TextWrapping="Wrap" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                            <NumberBox
+                                Header="阈值（字）"
+                                Width="118"
+                                Minimum="300"
+                                Maximum="20000"
+                                SmallChange="250"
+                                SpinButtonPlacementMode="Compact"
+                                IsEnabled="{x:Bind ViewModel.EnableLongTextGuard, Mode=OneWay}"
+                                Value="{x:Bind ViewModel.LongTextGuardThreshold, Mode=TwoWay}" />
+                            <ToggleSwitch
+                                VerticalAlignment="Bottom"
+                                OnContent="开启"
+                                OffContent="关闭"
+                                IsOn="{x:Bind ViewModel.EnableLongTextGuard, Mode=TwoWay}" />
+                        </StackPanel>
+                    </Grid>
+
+                    <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="代码 / 网址 / 路径 / 报错智能防误翻" FontWeight="SemiBold" />
+                            <TextBlock
+                                Text="自动识别纯链接、本地路径、JSON/XML、报错堆栈与代码片段并跳过普通翻译，提供一键「AI 解释」或强制翻译（不影响单个变量名查词）"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                TextWrapping="Wrap" />
+                        </StackPanel>
+                        <ToggleSwitch
+                            Grid.Column="1"
+                            OnContent="开启"
+                            OffContent="关闭"
+                            IsOn="{x:Bind ViewModel.EnableSmartInputGuard, Mode=TwoWay}" />
+                    </Grid>
+
+                    <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
                     <StackPanel Spacing="8">
                         <StackPanel Spacing="2">
                             <TextBlock Text="自定义专业术语表 (Glossary)" FontWeight="SemiBold" />
@@ -254,10 +309,32 @@
                 </StackPanel>
             </Border>
 
-            <!-- Translation Popup Window Behavior -->
-            <TextBlock Text="翻译弹窗行为" Style="{StaticResource BodyStrongTextBlockStyle}" Margin="0,8,0,0" />
+            <!-- Translation Popup & Hover Selection Behavior -->
+            <TextBlock Text="划词悬浮图标与弹窗行为" Style="{StaticResource BodyStrongTextBlockStyle}" Margin="0,8,0,0" />
             <Border Style="{StaticResource PopTranslateSettingsCardStyle}">
                 <StackPanel Spacing="14">
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="启用划词翻译悬浮图标" FontWeight="SemiBold" />
+                            <TextBlock
+                                Text="鼠标拖选或双击选中文字后，在指针旁显示紧凑「译」悬浮图标；关闭后仍可通过快捷键触发划词翻译"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                TextWrapping="Wrap" />
+                        </StackPanel>
+                        <ToggleSwitch
+                            Grid.Column="1"
+                            OnContent="开启"
+                            OffContent="关闭"
+                            IsOn="{x:Bind ViewModel.EnableHoverIcon, Mode=TwoWay}" />
+                    </Grid>
+
+                    <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
                     <Grid ColumnSpacing="16">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
@@ -446,6 +523,29 @@
                             OnContent="开启"
                             OffContent="关闭"
                             IsOn="{x:Bind ViewModel.LaunchAtStartup, Mode=TwoWay}" />
+                    </Grid>
+
+                    <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="用户配置与加密密钥存储位置" FontWeight="SemiBold" />
+                            <TextBlock
+                                Text="{x:Bind ViewModel.ConfigFilePath, Mode=OneWay}"
+                                IsTextSelectionEnabled="True"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                TextWrapping="Wrap" />
+                        </StackPanel>
+                        <Button
+                            Grid.Column="1"
+                            Content="打开配置目录"
+                            VerticalAlignment="Center"
+                            Command="{x:Bind ViewModel.OpenConfigDirectoryCommand}" />
                     </Grid>
                 </StackPanel>
             </Border>

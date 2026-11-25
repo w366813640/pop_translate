@@ -12,6 +12,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\PopTranslate.Core\PopTranslate.Core.csproj" />
     <ProjectReference Include="..\..\src\PopTranslate.Win32\PopTranslate.Win32.csproj" />
+    <ProjectReference Include="..\..\src\PopTranslate.App\PopTranslate.App.csproj" />
   </ItemGroup>
 
   <ItemGroup>

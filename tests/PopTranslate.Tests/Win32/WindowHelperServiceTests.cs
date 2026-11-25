@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using PopTranslate.Core.Models;
 using PopTranslate.Win32.Windowing;
 using Xunit;
@@ -125,6 +126,14 @@ public sealed class WindowHelperServiceTests
         Assert.True(clamped.Y >= primary.WorkArea.Y);
         Assert.True(clamped.X + 440 <= primary.WorkArea.Right || 440 > primary.WorkArea.Width);
         Assert.True(clamped.Y + 300 <= primary.WorkArea.Bottom || 300 > primary.WorkArea.Height);
+
+        var centered = _service.CalculateCenteredWindowPosition(
+            new ScreenPoint(primary.WorkArea.Right - 10, primary.WorkArea.Bottom - 10),
+            windowWidthPx: 440,
+            windowHeightPx: 300);
+
+        var expectedCentered = WindowHelperService.CenterPositionInWorkArea(440, 300, primary.WorkArea);
+        Assert.Equal(expectedCentered, centered);
     }
 
     [Fact]
@@ -133,4 +142,95 @@ public sealed class WindowHelperServiceTests
         var scale = _service.GetDpiScaleForWindow(nint.Zero);
         Assert.True(scale >= 1.0);
     }
+
+    [Fact]
+    public void ConfigureNoActivateOverlayWindow_StripsOverlappedFrameAndAllowsCompactSquareSize()
+    {
+        const uint wsOverlappedWindow = 0x00CF0000;
+        const uint wsPopup = 0x80000000;
+        const uint wsCaption = 0x00C00000;
+        const uint wsThickFrame = 0x00040000;
+        const uint wsBorder = 0x00800000;
+        const uint wsDlgFrame = 0x00400000;
+        const uint wsExAppWindow = 0x00040000;
+        const uint wsExToolWindow = 0x00000080;
+        const uint wsExNoActivate = 0x08000000;
+        const uint wsExTopMost = 0x00000008;
+        const int gwlStyle = -16;
+        const int gwlExStyle = -20;
+
+        var hwnd = CreateWindowExW(
+            wsExAppWindow,
+            "STATIC",
+            string.Empty,
+            wsOverlappedWindow,
+            100,
+            100,
+            300,
+            300,
+            nint.Zero,
+            nint.Zero,
+            nint.Zero,
+            nint.Zero);
+        Assert.NotEqual(nint.Zero, hwnd);
+
+        try
+        {
+            _service.ConfigureNoActivateOverlayWindow(hwnd);
+            _service.MoveAndResizeWindow(hwnd, 120, 120, 32, 32, activate: false);
+
+            Assert.True(GetWindowRect(hwnd, out var rect));
+            Assert.Equal(32, rect.Right - rect.Left);
+            Assert.Equal(32, rect.Bottom - rect.Top);
+
+            var style = unchecked((uint)GetWindowLongPtrW(hwnd, gwlStyle));
+            Assert.True((style & wsPopup) != 0, "Overlay window must use WS_POPUP so Win32 does not clamp width to SM_CXMINTRACK.");
+            Assert.Equal(0u, style & (wsCaption | wsThickFrame | wsBorder | wsDlgFrame));
+
+            var exStyle = unchecked((uint)GetWindowLongPtrW(hwnd, gwlExStyle));
+            Assert.Equal(0u, exStyle & wsExAppWindow);
+            Assert.True((exStyle & wsExToolWindow) != 0);
+            Assert.True((exStyle & wsExNoActivate) != 0);
+            Assert.True((exStyle & wsExTopMost) != 0);
+        }
+        finally
+        {
+            DestroyWindow(hwnd);
+        }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeRect
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern nint CreateWindowExW(
+        uint exStyle,
+        string className,
+        string windowName,
+        uint style,
+        int x,
+        int y,
+        int width,
+        int height,
+        nint parent,
+        nint menu,
+        nint instance,
+        nint param);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool DestroyWindow(nint hwnd);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetWindowRect(nint hwnd, out NativeRect rect);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern nint GetWindowLongPtrW(nint hwnd, int index);
 }

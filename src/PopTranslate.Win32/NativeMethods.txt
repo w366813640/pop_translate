@@ -138,3 +138,11 @@ SysFreeString
 MSLLHOOKSTRUCT
 KBDLLHOOKSTRUCT
 CreateFontIndirectW
+
+// Native System Tray Icon
+Shell_NotifyIconW
+NOTIFYICONDATAW
+NOTIFY_ICON_MESSAGE
+NOTIFY_ICON_DATA_FLAGS
+RegisterWindowMessageW
+FindWindowW

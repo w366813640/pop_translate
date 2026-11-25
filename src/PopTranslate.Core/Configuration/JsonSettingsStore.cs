@@ -19,26 +19,44 @@ public sealed class JsonSettingsStore : ISettingsStore
     };
 
     private readonly ISecretProtector _secretProtector;
+    private readonly string? _legacyFallbackFilePath;
     private readonly SemaphoreSlim _ioLock = new(1, 1);
     private AppSettings _current;
 
     [ActivatorUtilitiesConstructor]
     public JsonSettingsStore(ISecretProtector secretProtector)
-        : this(secretProtector, customSettingsFilePath: null)
+        : this(secretProtector, customSettingsFilePath: null, legacyFallbackFilePath: null)
     {
     }
 
-    public JsonSettingsStore(ISecretProtector secretProtector, string? customSettingsFilePath)
+    public JsonSettingsStore(
+        ISecretProtector secretProtector,
+        string? customSettingsFilePath,
+        string? legacyFallbackFilePath = null)
     {
         _secretProtector = secretProtector ?? throw new ArgumentNullException(nameof(secretProtector));
-        SettingsFilePath = string.IsNullOrWhiteSpace(customSettingsFilePath)
-            ? GetDefaultSettingsPath()
-            : Path.GetFullPath(customSettingsFilePath);
+        if (string.IsNullOrWhiteSpace(customSettingsFilePath))
+        {
+            SettingsFilePath = GetDefaultSettingsPath();
+            _legacyFallbackFilePath = IsPortableMode()
+                ? null
+                : (string.IsNullOrWhiteSpace(legacyFallbackFilePath)
+                    ? GetLegacyLocalSettingsPath()
+                    : Path.GetFullPath(legacyFallbackFilePath));
+        }
+        else
+        {
+            SettingsFilePath = Path.GetFullPath(customSettingsFilePath);
+            _legacyFallbackFilePath = string.IsNullOrWhiteSpace(legacyFallbackFilePath)
+                ? null
+                : Path.GetFullPath(legacyFallbackFilePath);
+        }
+
         _current = AppSettings.CreateDefault();
     }
 
     public JsonSettingsStore(string? customSettingsFilePath = null)
-        : this(new DpapiSecretProtector(), customSettingsFilePath)
+        : this(new DpapiSecretProtector(), customSettingsFilePath, legacyFallbackFilePath: null)
     {
     }
 
@@ -48,22 +66,57 @@ public sealed class JsonSettingsStore : ISettingsStore
 
     public event EventHandler<AppSettings>? SettingsChanged;
 
-    public static bool IsPortableMode() =>
-        File.Exists(Path.Combine(AppContext.BaseDirectory, "portable"));
+    public static string? ResolvePortableRootDirectory(string? baseDirectory = null)
+    {
+        var rawBase = string.IsNullOrWhiteSpace(baseDirectory) ? AppContext.BaseDirectory : baseDirectory;
+        var trimmed = Path.GetFullPath(rawBase).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 
-    public static string GetDefaultSettingsPath() =>
-        IsPortableMode()
-            ? Path.Combine(AppContext.BaseDirectory, "data", "settings.json")
+        if (File.Exists(Path.Combine(trimmed, "portable")))
+        {
+            return trimmed;
+        }
+
+        var folderName = Path.GetFileName(trimmed);
+        if (string.Equals(folderName, "runtime", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(folderName, "bin", StringComparison.OrdinalIgnoreCase))
+        {
+            var parent = Directory.GetParent(trimmed);
+            if (parent is not null && File.Exists(Path.Combine(parent.FullName, "portable")))
+            {
+                return parent.FullName;
+            }
+        }
+
+        return null;
+    }
+
+    public static bool IsPortableMode(string? baseDirectory = null) =>
+        ResolvePortableRootDirectory(baseDirectory) is not null;
+
+    public static string GetDefaultSettingsPath(string? baseDirectory = null) =>
+        ResolvePortableRootDirectory(baseDirectory) is { } portableRoot
+            ? Path.Combine(portableRoot, "data", "settings.json")
             : Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                 "PopTranslate",
                 "settings.json");
+
+    public static string GetLegacyLocalSettingsPath() =>
+        Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "PopTranslate",
+            "settings.json");
 
     public async Task<AppSettings> LoadAsync(CancellationToken cancellationToken = default)
     {
         await _ioLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            if (!File.Exists(SettingsFilePath))
+            {
+                TryMigrateLegacySettingsFile();
+            }
+
             if (!File.Exists(SettingsFilePath))
             {
                 var defaults = AppSettings.CreateDefault();
@@ -73,22 +126,10 @@ public sealed class JsonSettingsStore : ISettingsStore
 
             try
             {
-                await using var stream = new FileStream(
-                    SettingsFilePath,
-                    FileMode.Open,
-                    FileAccess.Read,
-                    FileShare.ReadWrite,
-                    bufferSize: 4096,
-                    useAsync: true);
-
-                var loaded = await JsonSerializer.DeserializeAsync<AppSettings>(
-                    stream,
-                    SerializerOptions,
-                    cancellationToken).ConfigureAwait(false);
-
+                var loaded = await ReadAndDeserializeAsync(SettingsFilePath, cancellationToken).ConfigureAwait(false);
                 if (loaded is null)
                 {
-                    return BackupCorruptAndRestoreDefaults();
+                    return await RecoverFromBackupOrRestoreDefaultsAsync(cancellationToken).ConfigureAwait(false);
                 }
 
                 SanitizeStructure(loaded);
@@ -108,7 +149,7 @@ public sealed class JsonSettingsStore : ISettingsStore
                     or ArgumentException
                     or FormatException)
             {
-                return BackupCorruptAndRestoreDefaults();
+                return await RecoverFromBackupOrRestoreDefaultsAsync(cancellationToken).ConfigureAwait(false);
             }
         }
         finally
@@ -124,46 +165,67 @@ public sealed class JsonSettingsStore : ISettingsStore
         SanitizeStructure(settings);
         var snapshot = settings.Clone();
         SanitizeStructure(snapshot);
-        SanitizeAndProtectSecrets(snapshot);
 
         await _ioLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            SanitizeAndProtectSecrets(snapshot, Volatile.Read(ref _current));
+
             var directory = Path.GetDirectoryName(SettingsFilePath);
             if (!string.IsNullOrWhiteSpace(directory))
             {
                 Directory.CreateDirectory(directory);
             }
 
-            var tempPath = $"{SettingsFilePath}.{Guid.NewGuid():N}.tmp";
-            try
+            var serializedBytes = JsonSerializer.SerializeToUtf8Bytes(snapshot, SerializerOptions);
+
+            byte[]? existingBytes = null;
+            if (File.Exists(SettingsFilePath))
             {
-                await using (var stream = new FileStream(
-                    tempPath,
-                    FileMode.Create,
-                    FileAccess.Write,
-                    FileShare.None,
-                    bufferSize: 4096,
-                    useAsync: true))
+                try
                 {
-                    await JsonSerializer.SerializeAsync(
-                        stream,
-                        snapshot,
-                        SerializerOptions,
-                        cancellationToken).ConfigureAwait(false);
-                    await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
-                    stream.Flush(flushToDisk: true);
+                    existingBytes = await File.ReadAllBytesAsync(SettingsFilePath, cancellationToken).ConfigureAwait(false);
+                }
+                catch
+                {
+                    existingBytes = null;
+                }
+            }
+
+            // Skip redundant disk rewrite & avoid clobbering a distinct .bak snapshot when content is identical.
+            if (existingBytes is not null && existingBytes.AsSpan().SequenceEqual(serializedBytes))
+            {
+                Volatile.Write(ref _current, snapshot);
+            }
+            else
+            {
+                var tempPath = $"{SettingsFilePath}.{Guid.NewGuid():N}.tmp";
+                try
+                {
+                    await using (var stream = new FileStream(
+                        tempPath,
+                        FileMode.Create,
+                        FileAccess.Write,
+                        FileShare.None,
+                        bufferSize: 4096,
+                        useAsync: true))
+                    {
+                        await stream.WriteAsync(serializedBytes, cancellationToken).ConfigureAwait(false);
+                        await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+                        stream.Flush(flushToDisk: true);
+                    }
+
+                    TryWriteBackupSnapshot(existingBytes);
+                    await MoveWithRetryAsync(tempPath, SettingsFilePath, cancellationToken).ConfigureAwait(false);
+                }
+                catch
+                {
+                    TryDeleteFile(tempPath);
+                    throw;
                 }
 
-                await MoveWithRetryAsync(tempPath, SettingsFilePath, cancellationToken).ConfigureAwait(false);
+                Volatile.Write(ref _current, snapshot);
             }
-            catch
-            {
-                TryDeleteFile(tempPath);
-                throw;
-            }
-
-            Volatile.Write(ref _current, snapshot);
         }
         finally
         {
@@ -173,12 +235,119 @@ public sealed class JsonSettingsStore : ISettingsStore
         SettingsChanged?.Invoke(this, snapshot.Clone());
     }
 
-    private AppSettings BackupCorruptAndRestoreDefaults()
+    private static async Task<AppSettings?> ReadAndDeserializeAsync(string path, CancellationToken cancellationToken)
+    {
+        await using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite,
+            bufferSize: 4096,
+            useAsync: true);
+
+        return await JsonSerializer.DeserializeAsync<AppSettings>(
+            stream,
+            SerializerOptions,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<AppSettings> RecoverFromBackupOrRestoreDefaultsAsync(CancellationToken cancellationToken)
     {
         TryBackupCorruptFile();
+
+        var backupPath = SettingsFilePath + ".bak";
+        if (File.Exists(backupPath))
+        {
+            try
+            {
+                var recovered = await ReadAndDeserializeAsync(backupPath, cancellationToken).ConfigureAwait(false);
+                if (recovered is not null)
+                {
+                    SanitizeStructure(recovered);
+                    SanitizeAndProtectSecrets(recovered);
+                    try
+                    {
+                        File.Copy(backupPath, SettingsFilePath, overwrite: true);
+                    }
+                    catch
+                    {
+                        // Best-effort primary file restoration.
+                    }
+
+                    Volatile.Write(ref _current, recovered);
+                    return recovered.Clone();
+                }
+            }
+            catch
+            {
+                // Backup also unreadable; fall through to clean defaults.
+            }
+        }
+
         var defaults = AppSettings.CreateDefault();
         Volatile.Write(ref _current, defaults);
         return defaults.Clone();
+    }
+
+    private void TryMigrateLegacySettingsFile()
+    {
+        if (string.IsNullOrWhiteSpace(_legacyFallbackFilePath) ||
+            string.Equals(_legacyFallbackFilePath, SettingsFilePath, StringComparison.OrdinalIgnoreCase) ||
+            !File.Exists(_legacyFallbackFilePath))
+        {
+            return;
+        }
+
+        try
+        {
+            var dir = Path.GetDirectoryName(SettingsFilePath);
+            if (!string.IsNullOrWhiteSpace(dir))
+            {
+                Directory.CreateDirectory(dir);
+            }
+
+            File.Copy(_legacyFallbackFilePath, SettingsFilePath, overwrite: false);
+        }
+        catch
+        {
+            // Best-effort one-time migration from legacy LocalAppData path.
+        }
+    }
+
+    private void TryWriteBackupSnapshot(byte[]? existingBytes)
+    {
+        try
+        {
+            if (existingBytes is { Length: > 16 })
+            {
+                var backupPath = SettingsFilePath + ".bak";
+                if (File.Exists(backupPath))
+                {
+                    try
+                    {
+                        var existingBackupBytes = File.ReadAllBytes(backupPath);
+                        if (existingBackupBytes.AsSpan().SequenceEqual(existingBytes))
+                        {
+                            return;
+                        }
+                    }
+                    catch
+                    {
+                        // Ignore unreadable prior backup and overwrite with known-good bytes.
+                    }
+                }
+
+                File.WriteAllBytes(backupPath, existingBytes);
+            }
+            else if (File.Exists(SettingsFilePath) && new FileInfo(SettingsFilePath).Length > 16)
+            {
+                File.Copy(SettingsFilePath, SettingsFilePath + ".bak", overwrite: true);
+            }
+        }
+        catch
+        {
+            // Best-effort rolling backup only.
+        }
     }
 
     private static async Task MoveWithRetryAsync(
@@ -204,10 +373,10 @@ public sealed class JsonSettingsStore : ISettingsStore
     {
         settings.Hotkeys ??= new HotkeyConfig();
         settings.Hotkeys.SelectionTranslate ??= HotkeyConfig.DefaultSelectionTranslate;
-        settings.Hotkeys.InputTranslate ??= HotkeyConfig.DefaultInputTranslate;
         settings.Hotkeys.ScreenshotTranslate ??= HotkeyConfig.DefaultScreenshotTranslate;
         settings.Hotkeys.SelectionPolish ??= HotkeyConfig.DefaultSelectionPolish;
         settings.Hotkeys.SilentOcr ??= HotkeyConfig.DefaultSilentOcr;
+        settings.Hotkeys.ReplaceTranslate ??= HotkeyConfig.DefaultReplaceTranslate;
 
         settings.Selection ??= new SelectionConfig();
         settings.Selection.ProcessBlacklist ??= [.. SelectionConfig.DefaultProcessBlacklist];
@@ -259,7 +428,7 @@ public sealed class JsonSettingsStore : ISettingsStore
         }
     }
 
-    private void SanitizeAndProtectSecrets(AppSettings settings)
+    private void SanitizeAndProtectSecrets(AppSettings settings, AppSettings? previous = null)
     {
         if (settings.SchemaVersion <= 0)
         {
@@ -276,20 +445,58 @@ public sealed class JsonSettingsStore : ISettingsStore
             settings.SecondaryTargetLanguage = LanguageCode.English;
         }
 
-        foreach (var provider in settings.Providers)
+        Dictionary<string, string>? previousProviderKeys = null;
+        if (previous?.Providers is { Count: > 0 })
         {
-            provider.EncryptedApiKey = EnsureProtected(provider.EncryptedApiKey);
+            previousProviderKeys = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var prev in previous.Providers)
+            {
+                if (!string.IsNullOrWhiteSpace(prev.Id) && !string.IsNullOrWhiteSpace(prev.EncryptedApiKey))
+                {
+                    previousProviderKeys[prev.Id] = prev.EncryptedApiKey;
+                }
+            }
         }
 
-        settings.Ocr.EncryptedVisionApiKey = EnsureProtected(settings.Ocr.EncryptedVisionApiKey);
-        settings.Proxy.EncryptedPassword = EnsureProtected(settings.Proxy.EncryptedPassword);
+        foreach (var provider in settings.Providers)
+        {
+            string? existingHint = null;
+            previousProviderKeys?.TryGetValue(provider.Id, out existingHint);
+            provider.EncryptedApiKey = EnsureProtected(provider.EncryptedApiKey, existingHint);
+        }
+
+        settings.Ocr.EncryptedVisionApiKey = EnsureProtected(
+            settings.Ocr.EncryptedVisionApiKey,
+            previous?.Ocr?.EncryptedVisionApiKey);
+        settings.Proxy.EncryptedPassword = EnsureProtected(
+            settings.Proxy.EncryptedPassword,
+            previous?.Proxy?.EncryptedPassword);
     }
 
-    private string EnsureProtected(string? value)
+    private string EnsureProtected(string? value, string? existingProtectedHint = null)
     {
         if (string.IsNullOrWhiteSpace(value))
         {
             return string.Empty;
+        }
+
+        if (!string.IsNullOrWhiteSpace(existingProtectedHint) &&
+            DpapiSecretProtector.IsProtected(existingProtectedHint) &&
+            _secretProtector.TryUnprotect(existingProtectedHint, out var existingPlain))
+        {
+            if (DpapiSecretProtector.IsProtected(value))
+            {
+                if (string.Equals(value, existingProtectedHint, StringComparison.Ordinal) ||
+                    (_secretProtector.TryUnprotect(value, out var incomingPlain) &&
+                     string.Equals(incomingPlain, existingPlain, StringComparison.Ordinal)))
+                {
+                    return existingProtectedHint;
+                }
+            }
+            else if (string.Equals(value, existingPlain, StringComparison.Ordinal))
+            {
+                return existingProtectedHint;
+            }
         }
 
         if (DpapiSecretProtector.IsProtected(value))

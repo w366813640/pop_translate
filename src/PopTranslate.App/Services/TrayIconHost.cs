@@ -1,36 +1,78 @@
-using System.Drawing;
+using PopTranslate.Core.Contracts;
 using PopTranslate.Core.Models;
+using PopTranslate.Win32.Windowing;
 using CommunityToolkit.Mvvm.Input;
-using H.NotifyIcon;
 using Microsoft.UI.Dispatching;
-using Microsoft.UI.Xaml.Controls;
 
 namespace PopTranslate.App.Services;
 
 /// <summary>
-/// Manages the persistent Windows 11 system tray icon and context menu using H.NotifyIcon.WinUI.
-/// Resilient to Explorer / Shell_TrayWnd unavailability at early startup with automatic retry.
+/// Manages the persistent Windows 11 system tray icon and context menu via pure Win32 Shell_NotifyIconW.
+/// Builds fresh native Win32 menus on every right-click so state updates (mute 30m, hover toggle, hotkeys)
+/// can never invalidate or break subsequent right-click popups.
 /// </summary>
 public sealed class TrayIconHost : IDisposable
 {
+    public const int CommandInputTranslate = 101;
+    public const int CommandReplaceTranslate = 102;
+    public const int CommandPolishInput = 103;
+    public const int CommandScreenshotTranslate = 104;
+    public const int CommandSilentOcr = 105;
+    public const int CommandToggleHoverIcon = 201;
+    public const int CommandToggleHoverMute = 202;
+    public const int CommandToggleClipboardListener = 203;
+    public const int CommandSettings = 301;
+    public const int CommandRestartAsAdmin = 302;
+    public const int CommandExit = 401;
+
     private static readonly TimeSpan RetryInterval = TimeSpan.FromSeconds(3);
 
-    private TaskbarIcon? _taskbarIcon;
-    private Icon? _loadedIcon;
-    private MenuFlyoutItem? _inputTranslateItem;
-    private MenuFlyoutItem? _polishInputItem;
-    private MenuFlyoutItem? _screenshotTranslateItem;
-    private MenuFlyoutItem? _silentOcrItem;
-    private ToggleMenuFlyoutItem? _hoverIconToggleItem;
-    private ToggleMenuFlyoutItem? _hoverMuteToggleItem;
-    private ToggleMenuFlyoutItem? _clipboardListenerToggleItem;
-    private MenuFlyoutItem? _restartAsAdminItem;
-    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _createRetryTimer;
+    private readonly Lock _stateLock = new();
+    private readonly Win32TrayIconService _backend;
+    private DispatcherQueueTimer? _createRetryTimer;
+
     private string _latestToolTipText = "PopTranslate 翻译";
-    private bool _isUpdatingState;
+    private bool _isHoverIconEnabled = true;
+    private bool _isHoverMuted;
+    private bool _isClipboardListenerEnabled;
+    private bool _isRunningAsAdministrator;
+    private bool _hasLoggedCreationSuccess;
     private bool _disposed;
 
+    public TrayIconHost()
+        : this(new Win32TrayIconService())
+    {
+    }
+
+    public TrayIconHost(Win32TrayIconService backend)
+    {
+        _backend = backend ?? throw new ArgumentNullException(nameof(backend));
+
+        InputTranslateCommand = new RelayCommand(() => InputTranslateRequested?.Invoke(this, EventArgs.Empty));
+        ReplaceTranslateCommand = new RelayCommand(() => ReplaceTranslateRequested?.Invoke(this, EventArgs.Empty));
+        PolishInputCommand = new RelayCommand(() => PolishInputRequested?.Invoke(this, EventArgs.Empty));
+        ScreenshotTranslateCommand = new RelayCommand(() => ScreenshotTranslateRequested?.Invoke(this, EventArgs.Empty));
+        SilentOcrCommand = new RelayCommand(() => SilentOcrRequested?.Invoke(this, EventArgs.Empty));
+        ToggleHoverIconCommand = new RelayCommand(ExecuteToggleHoverIcon);
+        ToggleHoverMuteCommand = new RelayCommand(ExecuteToggleHoverMute);
+        ToggleClipboardListenerCommand = new RelayCommand(ExecuteToggleClipboardListener);
+        SettingsCommand = new RelayCommand(() => SettingsRequested?.Invoke(this, EventArgs.Empty));
+        RestartAsAdministratorCommand = new RelayCommand(() =>
+        {
+            if (!IsRunningAsAdministrator)
+            {
+                RestartAsAdministratorRequested?.Invoke(this, EventArgs.Empty);
+            }
+        });
+        ExitCommand = new RelayCommand(() => ExitRequested?.Invoke(this, EventArgs.Empty));
+
+        _backend.LeftClickRequested += (_, _) => InputTranslateCommand.Execute(null);
+        _backend.DoubleClickRequested += (_, _) => SettingsCommand.Execute(null);
+        _backend.MenuCommandSelected += (_, commandId) => DispatchMenuCommand(commandId);
+    }
+
     public event EventHandler? InputTranslateRequested;
+    public event EventHandler? ReplaceTranslateRequested;
     public event EventHandler? PolishInputRequested;
     public event EventHandler? ScreenshotTranslateRequested;
     public event EventHandler? SilentOcrRequested;
@@ -41,6 +83,142 @@ public sealed class TrayIconHost : IDisposable
     public event EventHandler? RestartAsAdministratorRequested;
     public event EventHandler? ExitRequested;
 
+    public IRelayCommand InputTranslateCommand { get; }
+    public IRelayCommand ReplaceTranslateCommand { get; }
+    public IRelayCommand PolishInputCommand { get; }
+    public IRelayCommand ScreenshotTranslateCommand { get; }
+    public IRelayCommand SilentOcrCommand { get; }
+    public IRelayCommand ToggleHoverIconCommand { get; }
+    public IRelayCommand ToggleHoverMuteCommand { get; }
+    public IRelayCommand ToggleClipboardListenerCommand { get; }
+    public IRelayCommand SettingsCommand { get; }
+    public IRelayCommand RestartAsAdministratorCommand { get; }
+    public IRelayCommand ExitCommand { get; }
+
+    public bool IsTrayIconCreated => _backend.IsCreated;
+
+    public bool IsHoverIconEnabled
+    {
+        get { lock (_stateLock) { return _isHoverIconEnabled; } }
+    }
+
+    public bool IsHoverMuted
+    {
+        get { lock (_stateLock) { return _isHoverMuted; } }
+    }
+
+    public bool IsClipboardListenerEnabled
+    {
+        get { lock (_stateLock) { return _isClipboardListenerEnabled; } }
+    }
+
+    public bool IsRunningAsAdministrator
+    {
+        get { lock (_stateLock) { return _isRunningAsAdministrator; } }
+    }
+
+    public string InputTranslateLabel { get; private set; } = "输入翻译";
+    public string ReplaceTranslateLabel { get; private set; } = "替换翻译";
+    public string PolishInputLabel { get; private set; } = "文本润色";
+    public string ScreenshotTranslateLabel { get; private set; } = "截图翻译";
+    public string SilentOcrLabel { get; private set; } = "静默截图 OCR";
+
+    public void SyncMenuState(
+        AppSettings settings,
+        bool isRunningAsAdministrator,
+        bool isHoverMuted = false,
+        bool isClipboardListenerEnabled = false)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+
+        lock (_stateLock)
+        {
+            _isRunningAsAdministrator = isRunningAsAdministrator;
+            _isHoverIconEnabled = settings.Selection.EnableHoverIcon;
+            _isHoverMuted = isHoverMuted;
+            _isClipboardListenerEnabled = isClipboardListenerEnabled;
+            _latestToolTipText = BuildToolTipText(isRunningAsAdministrator, isHoverMuted, isClipboardListenerEnabled);
+
+            InputTranslateLabel = FormatMenuLabel("打开翻译窗", settings.Hotkeys.SelectionTranslate);
+            ReplaceTranslateLabel = FormatMenuLabel("替换翻译", settings.Hotkeys.ReplaceTranslate);
+            PolishInputLabel = FormatMenuLabel("文本润色", settings.Hotkeys.SelectionPolish);
+            ScreenshotTranslateLabel = FormatMenuLabel("截图翻译", settings.Hotkeys.ScreenshotTranslate);
+            SilentOcrLabel = FormatMenuLabel("静默截图 OCR", settings.Hotkeys.SilentOcr);
+        }
+    }
+
+    public IReadOnlyList<NativeContextMenuItem> BuildMenuItems()
+    {
+        lock (_stateLock)
+        {
+            var muteText = _isHoverMuted ? "暂停划词 30 分钟 (已暂停)" : "暂停划词 30 分钟";
+            var adminText = _isRunningAsAdministrator ? "已以管理员身份运行" : "以管理员身份重启";
+
+            return
+            [
+                new NativeContextMenuItem(CommandInputTranslate, InputTranslateLabel),
+                new NativeContextMenuItem(CommandReplaceTranslate, ReplaceTranslateLabel),
+                new NativeContextMenuItem(CommandPolishInput, PolishInputLabel),
+                new NativeContextMenuItem(CommandScreenshotTranslate, ScreenshotTranslateLabel),
+                new NativeContextMenuItem(CommandSilentOcr, SilentOcrLabel),
+                new NativeContextMenuItem(0, IsSeparator: true),
+                new NativeContextMenuItem(CommandToggleHoverIcon, "划词悬浮图标", IsChecked: _isHoverIconEnabled),
+                new NativeContextMenuItem(CommandToggleHoverMute, muteText, IsChecked: _isHoverMuted),
+                new NativeContextMenuItem(CommandToggleClipboardListener, "监听剪贴板翻译", IsChecked: _isClipboardListenerEnabled),
+                new NativeContextMenuItem(0, IsSeparator: true),
+                new NativeContextMenuItem(CommandSettings, "设置"),
+                new NativeContextMenuItem(CommandRestartAsAdmin, adminText, IsEnabled: !_isRunningAsAdministrator),
+                new NativeContextMenuItem(0, IsSeparator: true),
+                new NativeContextMenuItem(CommandExit, "退出"),
+            ];
+        }
+    }
+
+    public void DispatchMenuCommand(int commandId)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        switch (commandId)
+        {
+            case CommandInputTranslate:
+                InputTranslateCommand.Execute(null);
+                break;
+            case CommandReplaceTranslate:
+                ReplaceTranslateCommand.Execute(null);
+                break;
+            case CommandPolishInput:
+                PolishInputCommand.Execute(null);
+                break;
+            case CommandScreenshotTranslate:
+                ScreenshotTranslateCommand.Execute(null);
+                break;
+            case CommandSilentOcr:
+                SilentOcrCommand.Execute(null);
+                break;
+            case CommandToggleHoverIcon:
+                ToggleHoverIconCommand.Execute(null);
+                break;
+            case CommandToggleHoverMute:
+                ToggleHoverMuteCommand.Execute(null);
+                break;
+            case CommandToggleClipboardListener:
+                ToggleClipboardListenerCommand.Execute(null);
+                break;
+            case CommandSettings:
+                SettingsCommand.Execute(null);
+                break;
+            case CommandRestartAsAdmin:
+                RestartAsAdministratorCommand.Execute(null);
+                break;
+            case CommandExit:
+                ExitCommand.Execute(null);
+                break;
+        }
+    }
+
     public void Initialize(
         AppSettings settings,
         bool isRunningAsAdministrator,
@@ -50,143 +228,11 @@ public sealed class TrayIconHost : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        if (_taskbarIcon is not null)
+        SyncMenuState(settings, isRunningAsAdministrator, isHoverMuted, isClipboardListenerEnabled);
+
+        if (!TryApplyTrayIcon())
         {
-            UpdateState(settings, isRunningAsAdministrator, isHoverMuted, isClipboardListenerEnabled);
-            return;
-        }
-
-        _latestToolTipText = BuildToolTipText(isRunningAsAdministrator, isHoverMuted, isClipboardListenerEnabled);
-
-        var flyout = new MenuFlyout();
-
-        _inputTranslateItem = new MenuFlyoutItem
-        {
-            Text = FormatMenuLabel("输入翻译", settings.Hotkeys.InputTranslate),
-            Icon = new FontIcon { Glyph = "\uE8C1" },
-        };
-        _inputTranslateItem.Click += (_, _) => InputTranslateRequested?.Invoke(this, EventArgs.Empty);
-
-        _polishInputItem = new MenuFlyoutItem
-        {
-            Text = FormatMenuLabel("文本润色", settings.Hotkeys.SelectionPolish),
-            Icon = new FontIcon { Glyph = "\uE70F" },
-        };
-        _polishInputItem.Click += (_, _) => PolishInputRequested?.Invoke(this, EventArgs.Empty);
-
-        _screenshotTranslateItem = new MenuFlyoutItem
-        {
-            Text = FormatMenuLabel("截图翻译", settings.Hotkeys.ScreenshotTranslate),
-            Icon = new FontIcon { Glyph = "\uE722" },
-        };
-        _screenshotTranslateItem.Click += (_, _) => ScreenshotTranslateRequested?.Invoke(this, EventArgs.Empty);
-
-        _silentOcrItem = new MenuFlyoutItem
-        {
-            Text = FormatMenuLabel("静默截图 OCR", settings.Hotkeys.SilentOcr),
-            Icon = new FontIcon { Glyph = "\uE8C8" },
-        };
-        _silentOcrItem.Click += (_, _) => SilentOcrRequested?.Invoke(this, EventArgs.Empty);
-
-        _hoverIconToggleItem = new ToggleMenuFlyoutItem
-        {
-            Text = "划词悬浮图标",
-            IsChecked = settings.Selection.EnableHoverIcon,
-            Icon = new FontIcon { Glyph = "\uE7C9" },
-        };
-        _hoverIconToggleItem.Click += (_, _) =>
-        {
-            if (_isUpdatingState || _hoverIconToggleItem is null)
-            {
-                return;
-            }
-
-            HoverIconToggled?.Invoke(this, _hoverIconToggleItem.IsChecked);
-        };
-
-        _hoverMuteToggleItem = new ToggleMenuFlyoutItem
-        {
-            Text = isHoverMuted ? "暂停划词 30 分钟 (已暂停)" : "暂停划词 30 分钟",
-            IsChecked = isHoverMuted,
-            Icon = new FontIcon { Glyph = "\uE769" },
-        };
-        _hoverMuteToggleItem.Click += (_, _) =>
-        {
-            if (_isUpdatingState || _hoverMuteToggleItem is null)
-            {
-                return;
-            }
-
-            HoverMuteToggled?.Invoke(this, _hoverMuteToggleItem.IsChecked);
-        };
-
-        _clipboardListenerToggleItem = new ToggleMenuFlyoutItem
-        {
-            Text = "监听剪贴板翻译",
-            IsChecked = isClipboardListenerEnabled,
-            Icon = new FontIcon { Glyph = "\uE77F" },
-        };
-        _clipboardListenerToggleItem.Click += (_, _) =>
-        {
-            if (_isUpdatingState || _clipboardListenerToggleItem is null)
-            {
-                return;
-            }
-
-            ClipboardListenerToggled?.Invoke(this, _clipboardListenerToggleItem.IsChecked);
-        };
-
-        var settingsItem = new MenuFlyoutItem
-        {
-            Text = "设置",
-            Icon = new FontIcon { Glyph = "\uE713" },
-        };
-        settingsItem.Click += (_, _) => SettingsRequested?.Invoke(this, EventArgs.Empty);
-
-        _restartAsAdminItem = new MenuFlyoutItem
-        {
-            Text = isRunningAsAdministrator ? "已以管理员身份运行" : "以管理员身份重启",
-            IsEnabled = !isRunningAsAdministrator,
-            Icon = new FontIcon { Glyph = "\uE7EF" },
-        };
-        _restartAsAdminItem.Click += (_, _) => RestartAsAdministratorRequested?.Invoke(this, EventArgs.Empty);
-
-        var exitItem = new MenuFlyoutItem
-        {
-            Text = "退出",
-            Icon = new FontIcon { Glyph = "\uE7E8" },
-        };
-        exitItem.Click += (_, _) => ExitRequested?.Invoke(this, EventArgs.Empty);
-
-        flyout.Items.Add(_inputTranslateItem);
-        flyout.Items.Add(_polishInputItem);
-        flyout.Items.Add(_screenshotTranslateItem);
-        flyout.Items.Add(_silentOcrItem);
-        flyout.Items.Add(new MenuFlyoutSeparator());
-        flyout.Items.Add(_hoverIconToggleItem);
-        flyout.Items.Add(_hoverMuteToggleItem);
-        flyout.Items.Add(_clipboardListenerToggleItem);
-        flyout.Items.Add(new MenuFlyoutSeparator());
-        flyout.Items.Add(settingsItem);
-        flyout.Items.Add(_restartAsAdminItem);
-        flyout.Items.Add(new MenuFlyoutSeparator());
-        flyout.Items.Add(exitItem);
-
-        _taskbarIcon = new TaskbarIcon
-        {
-            ToolTipText = _latestToolTipText,
-            ContextMenuMode = ContextMenuMode.PopupMenu,
-            NoLeftClickDelay = true,
-            ContextFlyout = flyout,
-            LeftClickCommand = new RelayCommand(() => InputTranslateRequested?.Invoke(this, EventArgs.Empty)),
-            DoubleClickCommand = new RelayCommand(() => SettingsRequested?.Invoke(this, EventArgs.Empty)),
-        };
-
-        TryLoadTrayIcon(_taskbarIcon);
-
-        if (!TryForceCreateTrayIcon())
-        {
-            StartRetryTimer(uiDispatcher ?? DispatcherQueue.GetForCurrentThread());
+            StartRetryTimer(uiDispatcher);
         }
     }
 
@@ -196,74 +242,89 @@ public sealed class TrayIconHost : IDisposable
         bool isHoverMuted = false,
         bool isClipboardListenerEnabled = false)
     {
-        if (_disposed || _taskbarIcon is null)
+        if (_disposed)
         {
             return;
         }
 
-        _isUpdatingState = true;
+        SyncMenuState(settings, isRunningAsAdministrator, isHoverMuted, isClipboardListenerEnabled);
+        TryApplyTrayIcon();
+    }
+
+    private bool TryApplyTrayIcon()
+    {
+        if (_disposed)
+        {
+            return false;
+        }
+
+        string toolTip;
+        lock (_stateLock)
+        {
+            toolTip = _latestToolTipText;
+        }
+
         try
         {
-            _latestToolTipText = BuildToolTipText(isRunningAsAdministrator, isHoverMuted, isClipboardListenerEnabled);
-
-            if (_taskbarIcon.IsCreated)
+            var ok = _backend.CreateOrUpdate(toolTip, AppAssetHelper.IconPath, BuildMenuItems);
+            if (ok)
             {
-                try
+                StopRetryTimer();
+                if (!_hasLoggedCreationSuccess)
                 {
-                    _taskbarIcon.ToolTipText = _latestToolTipText;
+                    _hasLoggedCreationSuccess = true;
+                    AppDiagnosticsLogger.Info("Tray", "System tray icon registered (Shell_NotifyIconW succeeded).");
                 }
-                catch
-                {
-                    // Ignore transient Shell_NotifyIconW errors if Explorer is restarting.
-                }
+
+                return true;
             }
 
-            if (_inputTranslateItem is not null)
-            {
-                _inputTranslateItem.Text = FormatMenuLabel("输入翻译", settings.Hotkeys.InputTranslate);
-            }
-
-            if (_polishInputItem is not null)
-            {
-                _polishInputItem.Text = FormatMenuLabel("文本润色", settings.Hotkeys.SelectionPolish);
-            }
-
-            if (_screenshotTranslateItem is not null)
-            {
-                _screenshotTranslateItem.Text = FormatMenuLabel("截图翻译", settings.Hotkeys.ScreenshotTranslate);
-            }
-
-            if (_silentOcrItem is not null)
-            {
-                _silentOcrItem.Text = FormatMenuLabel("静默截图 OCR", settings.Hotkeys.SilentOcr);
-            }
-
-            if (_hoverIconToggleItem is not null)
-            {
-                _hoverIconToggleItem.IsChecked = settings.Selection.EnableHoverIcon;
-            }
-
-            if (_hoverMuteToggleItem is not null)
-            {
-                _hoverMuteToggleItem.IsChecked = isHoverMuted;
-                _hoverMuteToggleItem.Text = isHoverMuted ? "暂停划词 30 分钟 (已暂停)" : "暂停划词 30 分钟";
-            }
-
-            if (_clipboardListenerToggleItem is not null)
-            {
-                _clipboardListenerToggleItem.IsChecked = isClipboardListenerEnabled;
-            }
-
-            if (_restartAsAdminItem is not null)
-            {
-                _restartAsAdminItem.Text = isRunningAsAdministrator ? "已以管理员身份运行" : "以管理员身份重启";
-                _restartAsAdminItem.IsEnabled = !isRunningAsAdministrator;
-            }
+            AppDiagnosticsLogger.Warn(
+                "Tray",
+                $"Shell_NotifyIconW did not succeed yet (Win32 error {_backend.LastWin32Error}); retry scheduled.");
         }
-        finally
+        catch (Exception ex)
         {
-            _isUpdatingState = false;
+            AppDiagnosticsLogger.Warn("Tray", "Tray icon registration threw an exception.", ex);
         }
+
+        return false;
+    }
+
+    private void ExecuteToggleHoverIcon()
+    {
+        bool targetState;
+        lock (_stateLock)
+        {
+            targetState = !_isHoverIconEnabled;
+            _isHoverIconEnabled = targetState;
+        }
+
+        HoverIconToggled?.Invoke(this, targetState);
+    }
+
+    private void ExecuteToggleHoverMute()
+    {
+        bool targetState;
+        lock (_stateLock)
+        {
+            targetState = !_isHoverMuted;
+            _isHoverMuted = targetState;
+        }
+
+        HoverMuteToggled?.Invoke(this, targetState);
+    }
+
+    private void ExecuteToggleClipboardListener()
+    {
+        bool targetState;
+        lock (_stateLock)
+        {
+            targetState = !_isClipboardListenerEnabled;
+            _isClipboardListenerEnabled = targetState;
+        }
+
+        ClipboardListenerToggled?.Invoke(this, targetState);
     }
 
     private static string BuildToolTipText(
@@ -290,48 +351,6 @@ public sealed class TrayIconHost : IDisposable
         return baseText;
     }
 
-    private bool TryForceCreateTrayIcon()
-    {
-        if (_disposed || _taskbarIcon is null)
-        {
-            return false;
-        }
-
-        if (_taskbarIcon.IsCreated)
-        {
-            StopRetryTimer();
-            return true;
-        }
-
-        try
-        {
-            // Keep full responsiveness (do not throttle with Efficiency Mode) while resident in tray.
-            _taskbarIcon.ForceCreate(enablesEfficiencyMode: false);
-
-            if (_taskbarIcon.IsCreated)
-            {
-                StopRetryTimer();
-                try
-                {
-                    _taskbarIcon.ToolTipText = _latestToolTipText;
-                }
-                catch
-                {
-                    // Ignore tooltip sync failure on immediate creation.
-                }
-
-                return true;
-            }
-        }
-        catch
-        {
-            // Shell_TrayWnd may not be ready yet (e.g., early logon auto-start or non-shell session).
-            // App stays alive with hotkeys/hover/popups active while timer retries tray creation.
-        }
-
-        return false;
-    }
-
     private void StartRetryTimer(DispatcherQueue? dispatcher)
     {
         if (_disposed || dispatcher is null || _createRetryTimer is not null)
@@ -342,7 +361,7 @@ public sealed class TrayIconHost : IDisposable
         _createRetryTimer = dispatcher.CreateTimer();
         _createRetryTimer.Interval = RetryInterval;
         _createRetryTimer.IsRepeating = true;
-        _createRetryTimer.Tick += (_, _) => TryForceCreateTrayIcon();
+        _createRetryTimer.Tick += (_, _) => TryApplyTrayIcon();
         _createRetryTimer.Start();
     }
 
@@ -357,23 +376,6 @@ public sealed class TrayIconHost : IDisposable
         _createRetryTimer = null;
     }
 
-    private void TryLoadTrayIcon(TaskbarIcon taskbarIcon)
-    {
-        try
-        {
-            var iconPath = AppAssetHelper.IconPath;
-            if (File.Exists(iconPath))
-            {
-                _loadedIcon = new Icon(iconPath);
-                taskbarIcon.Icon = _loadedIcon;
-            }
-        }
-        catch
-        {
-            // Fallback gracefully if icon resource cannot be loaded.
-        }
-    }
-
     private static string FormatMenuLabel(string title, HotkeyGesture? gesture) =>
         gesture is null || gesture.IsEmpty ? title : $"{title} ({gesture.DisplayText})";
 
@@ -386,19 +388,6 @@ public sealed class TrayIconHost : IDisposable
 
         _disposed = true;
         StopRetryTimer();
-
-        try
-        {
-            _taskbarIcon?.Dispose();
-        }
-        catch
-        {
-            // Ignore disposal errors during process teardown.
-        }
-
-        _taskbarIcon = null;
-
-        _loadedIcon?.Dispose();
-        _loadedIcon = null;
+        _backend.Dispose();
     }
 }

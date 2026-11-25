@@ -15,6 +15,8 @@ public sealed partial class SettingsWindow : WindowEx
     private readonly nint _hwnd;
     private bool _hasCenteredOnce;
     private bool _suppressTabFlush;
+    private bool _isVisualTreeTornDown;
+    private bool _isClosed;
 
     public SettingsWindow(SettingsViewModel viewModel)
     {
@@ -28,18 +30,31 @@ public sealed partial class SettingsWindow : WindowEx
 
         _hwnd = this.GetWindowHandle();
 
-        AppWindow.Closing += async (_, args) =>
+        Activated += async (_, args) =>
         {
-            if (!AllowClose)
+            if (!_isClosed && args.WindowActivationState == Microsoft.UI.Xaml.WindowActivationState.Deactivated)
             {
-                args.Cancel = true;
-                AppWindow.Hide();
-                await ViewModel.FlushPendingChangesAsync();
+                await FlushPendingChangesSafelyAsync();
             }
-            else
+        };
+
+        AppWindow.Closing += async (_, _) =>
+        {
+            var flushTask = FlushPendingChangesSafelyAsync();
+            TearDownVisualTree();
+            await flushTask;
+        };
+
+        Closed += (_, _) =>
+        {
+            if (_isClosed)
             {
-                await ViewModel.FlushPendingChangesAsync();
+                return;
             }
+
+            _isClosed = true;
+            TearDownVisualTree();
+            WindowClosed?.Invoke(this, EventArgs.Empty);
         };
 
         AppWindow.Hide();
@@ -47,16 +62,38 @@ public sealed partial class SettingsWindow : WindowEx
 
     public SettingsViewModel ViewModel { get; }
 
+    public event EventHandler? ExitRequested;
+
+    public event EventHandler? WindowClosed;
+
     public bool AllowClose { get; set; }
 
     public nint WindowHandle => _hwnd;
 
-    public void ApplyTheme(AppThemeMode mode) => AppAssetHelper.ApplyTheme(this, mode);
+    public void ApplyTheme(AppThemeMode mode)
+    {
+        if (_isClosed)
+        {
+            return;
+        }
+
+        AppAssetHelper.ApplyTheme(this, mode);
+    }
 
     public async Task ShowAndRefreshAsync(string? initialPageTag = null)
     {
+        if (_isClosed)
+        {
+            return;
+        }
+
         await ViewModel.FlushPendingChangesAsync();
         await ViewModel.RefreshAllAsync();
+
+        if (_isClosed)
+        {
+            return;
+        }
 
         var tag = string.IsNullOrWhiteSpace(initialPageTag) ? ViewModel.SelectedPageTag : initialPageTag;
         _suppressTabFlush = true;
@@ -97,17 +134,68 @@ public sealed partial class SettingsWindow : WindowEx
         }
     }
 
+    private void SettingsNavView_ItemInvoked(NavigationView sender, NavigationViewItemInvokedEventArgs args)
+    {
+        if (args.InvokedItemContainer is NavigationViewItem { Tag: "Exit" })
+        {
+            ExitRequested?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
     private async void SettingsNavView_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
     {
+        if (_isClosed || _isVisualTreeTornDown)
+        {
+            return;
+        }
+
         if (args.SelectedItemContainer is NavigationViewItem { Tag: string tag })
         {
             if (!_suppressTabFlush)
             {
-                await ViewModel.FlushPendingChangesAsync();
+                await FlushPendingChangesSafelyAsync();
+                if (_isClosed || _isVisualTreeTornDown)
+                {
+                    return;
+                }
             }
 
             ViewModel.SelectedPageTag = tag;
             NavigateByTag(tag);
+        }
+    }
+
+    private void TearDownVisualTree()
+    {
+        if (_isVisualTreeTornDown)
+        {
+            return;
+        }
+
+        _isVisualTreeTornDown = true;
+
+        try
+        {
+            ContentFrame.Content = null;
+            ContentFrame.BackStack.Clear();
+            ContentFrame.ForwardStack.Clear();
+            SystemBackdrop = null;
+        }
+        catch
+        {
+            // Ignore teardown races if WinUI window visual tree is already releasing.
+        }
+    }
+
+    private async Task FlushPendingChangesSafelyAsync()
+    {
+        try
+        {
+            await ViewModel.FlushPendingChangesAsync();
+        }
+        catch (Exception ex)
+        {
+            AppDiagnosticsLogger.Warn("Settings", "Failed to flush pending settings changes.", ex);
         }
     }
 

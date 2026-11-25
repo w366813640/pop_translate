@@ -168,6 +168,7 @@ public sealed class ScreenshotCaptureTests
         public ScreenPoint GetCursorPosition() => new(4, 4);
         public nint GetForegroundWindowHandle() => nint.Zero;
         public ScreenPoint CalculateClampedWindowPosition(ScreenPoint anchorPoint, int windowWidthPx, int windowHeightPx, int cursorOffsetPx = 12) => anchorPoint;
+        public ScreenPoint CalculateCenteredWindowPosition(ScreenPoint referencePoint, int windowWidthPx, int windowHeightPx) => referencePoint;
         public double GetDpiScaleForWindow(nint windowHandle) => 1.0;
         public void ConfigureNoActivateOverlayWindow(nint windowHandle) { }
         public void ConfigurePopupToolWindow(nint windowHandle, bool hideFromTaskbar = true) { }

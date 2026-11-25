@@ -24,10 +24,13 @@ public static class AppServiceCollectionExtensions
         services.AddSingleton<NetworkSettingsViewModel>();
         services.AddSingleton<SettingsViewModel>();
 
-        // WinUI 3 Windows (instantiated lazily on UI thread during AppCoordinator.InitializeAsync / OpenSettingsAsync)
+        // WinUI 3 Windows
+        // FloatingHoverIconWindow is lazily pre-warmed only when hover icon is enabled;
+        // TranslationPopupWindow stays pre-warmed for <30ms open latency;
+        // SettingsWindow is transient so closing it tears down Mica and all XAML pages.
         services.AddSingleton<FloatingHoverIconWindow>();
         services.AddSingleton<TranslationPopupWindow>();
-        services.AddSingleton<SettingsWindow>();
+        services.AddTransient<SettingsWindow>();
 
         return services;
     }

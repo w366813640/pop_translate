@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
+using PopTranslate.Core.Configuration;
 
 namespace PopTranslate.App.Services;
 
@@ -17,14 +18,15 @@ public static partial class AppDiagnosticsLogger
     private static readonly Lock SyncRoot = new();
 
     public static bool IsPortableMode =>
-        File.Exists(Path.Combine(AppContext.BaseDirectory, "portable"));
+        JsonSettingsStore.IsPortableMode();
 
-    public static string LogDirectoryPath => IsPortableMode
-        ? Path.Combine(AppContext.BaseDirectory, "data", "logs")
-        : Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "PopTranslate",
-            "logs");
+    public static string LogDirectoryPath =>
+        JsonSettingsStore.ResolvePortableRootDirectory() is { } portableRoot
+            ? Path.Combine(portableRoot, "data", "logs")
+            : Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "PopTranslate",
+                "logs");
 
     public static string LogFilePath => Path.Combine(LogDirectoryPath, "app.log");
 

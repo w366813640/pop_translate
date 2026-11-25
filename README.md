@@ -22,9 +22,9 @@
   - 支持双目标语言智能路由、单词/短语词典模式自动分流（音标、词性释义、词形变化、双语例句）、开发者 `camelCase` / `snake_case` 标识符自动拆词、自定义术语表（Glossary）注入与 PDF/OCR 智能断行合并。
 - **统一单页专属 AI 润色卡片、一键回填替换与语音朗读**
   - 翻译与润色统一呈现在同一 Fluent 2 单页弹窗内：支持配置专属 AI 润色服务卡片（可选自动并发润色或零 Token 消耗的按需点击润色），涵盖通用流畅、学术正式、商务邮件、口语自然、精简凝练、代码命名（`CodeNaming` 四种命名规范生成）与自定义 Prompt 共 7 种可卡片内实时切换的润色风格。
-  - 支持**一键回填替换原文**（卡片「回填替换原文」按钮或 `Ctrl+Shift+Enter` 直接替换来源窗口选中文本）、一键/自动流式回译核对、本地词级 Myers Diff 高亮对比，以及原文/译文系统原生离线/自然语音 TTS 朗读。
+  - 支持**直接替换翻译**（选中输入框内文字后按 `Alt+R`、右键悬浮 `译` 图标或执行 `PopTranslate.exe replace`，静默翻译并原地替换为译文）与弹窗内**一键回填替换原文**（卡片「回填替换原文」按钮或 `Ctrl+Shift+Enter`）、一键/自动流式回译核对、本地词级 Myers Diff 高亮对比，以及原文/译文系统原生离线/自然语音 TTS 朗读。
 - **多显示器高 DPI 截图翻译与静默截图 OCR**
-  - 逐显示器高帧率冻结画面框选，完美适配混合 DPI 多屏环境；支持常规截图翻译（`Alt+S`）与**静默截图 OCR**（`Alt+Shift+S` 或截图时按住 `Ctrl` / `Ctrl+C` 直接识别文字写入剪贴板，不弹窗）。
+  - 逐显示器高帧率冻结画面框选，完美适配混合 DPI 多屏环境；支持常规截图翻译（`Alt+W`）与**静默截图 OCR**（`Alt+Shift+W` 或截图时按住 `Ctrl` / `Ctrl+C` 直接识别文字写入剪贴板，不弹窗）。
   - 默认内置 Windows 11 原生离线 OCR（`Windows.Media.Ocr` 零拷贝直通），并支持一键切换视觉大模型 OCR 的**纯文本 / Markdown 表格提取 / LaTeX 公式识别**三种专业模式（失败自动回退本地 OCR）及弹窗内缩略图重识别。
 - **原生 Windows 11 质感、便携模式与外部 CLI 联动**
   - 采用 WinUI 3 Fluent 2 设计语言，支持 Desktop Acrylic 翻译弹窗、Mica 设置窗口、浅色/深色主题跟随与系统托盘常驻（含临时剪贴板监听开关）。
@@ -80,35 +80,46 @@ dotnet test tests/PopTranslate.Tests/PopTranslate.Tests.csproj -p:Platform=x64
 
 ### 4. 发布独立便携版本（Release）
 
-```bash
-dotnet build src/PopTranslate.App/PopTranslate.App.csproj -c Release -p:Platform=x64
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish-release.ps1
+# 或直接执行：dotnet build src/PopTranslate.App/PopTranslate.App.csproj -c Release -p:Platform=x64
 ```
 
-编译产物位于 `src/PopTranslate.App/bin/x64/Release/net10.0-windows10.0.26100.0/`，默认自包含 Windows App SDK 运行时与 ReadyToRun 预编译优化。
+构建完成后会自动生成清爽规整的独立发布包 `release/PopTranslate-win-x64/`（已剥离编译期 `.winmd` 元数据、调试符号与冗余多语种资源目录，并启用 Windows App SDK 自包含与 ReadyToRun 预编译）：
+
+```text
+release/PopTranslate-win-x64/
+├── PopTranslate.exe   # 纯净主程序入口（转发全部 CLI 参数，零根目录 DLL 杂乱）
+├── README.md          # 使用说明
+├── LICENSE            # 开源协议
+└── runtime/           # 精简后的自包含运行时与静态资源子目录
+```
 
 ---
 
 ## 便携模式与 CLI 参数调用
 
-- **便携模式（Portable Mode）**：在 `PopTranslate.App.exe` 同级目录创建空文件 `portable`，配置与滚动脱敏日志将自动存储于 `./data/settings.json` 与 `./data/logs/app.log`。
+- **便携模式（Portable Mode）**：在 `PopTranslate.exe` 所在根目录创建空文件 `portable`，配置与滚动脱敏日志将自动存储于同级 `./data/settings.json` 与 `./data/logs/app.log`。
 - **单实例 CLI 外部触发**：运行中再次通过命令行调用可执行文件时，参数将经由当前用户命名管道转发给常驻实例：
 
 ```powershell
-PopTranslate.App.exe translate              # 触发当前选中文本翻译
-PopTranslate.App.exe translate "Hello"      # 直接弹出并翻译指定文本
-PopTranslate.App.exe polish "draft text"    # 打开统一单页弹窗并立即触发 AI 润色卡片
-PopTranslate.App.exe ocr                    # 触发截图翻译
-PopTranslate.App.exe silent-ocr             # 触发静默截图 OCR（直接写入剪贴板）
-PopTranslate.App.exe input                  # 打开输入翻译弹窗并聚焦输入框
-PopTranslate.App.exe settings Providers     # 打开设置窗口并跳转指定标签页
-PopTranslate.App.exe --minimized            # 静默启动并常驻系统托盘
+PopTranslate.exe translate              # 触发当前选中文本翻译
+PopTranslate.exe replace                # 静默翻译当前选中文本并原地替换到输入框
+PopTranslate.exe translate "Hello"      # 直接弹出并翻译指定文本
+PopTranslate.exe polish "draft text"    # 打开统一单页弹窗并立即触发 AI 润色卡片
+PopTranslate.exe ocr                    # 触发截图翻译
+PopTranslate.exe silent-ocr             # 触发静默截图 OCR（直接写入剪贴板）
+PopTranslate.exe input                  # 打开输入翻译弹窗并聚焦输入框
+PopTranslate.exe settings Providers     # 打开设置窗口并跳转指定标签页
+PopTranslate.exe exit                   # 保存配置并完全退出常驻进程
+PopTranslate.exe --minimized            # 静默启动并常驻系统托盘
 ```
 
 ---
 
 ## 隐私与安全说明
 
-- 应用配置默认存储于 `%LOCALAPPDATA%\PopTranslate\settings.json`（便携模式下为 `./data/settings.json`）。
+- 应用配置默认独立存储于系统用户配置目录 `%APPDATA%\PopTranslate\settings.json`（与程序发布包彻底解耦，版本覆盖升级绝不丢失配置；便携模式下为 `./data/settings.json`，发布脚本更新时亦保留 `data/` 目录），并在每次写入前自动维护 `settings.json.bak` 滚动备份；脱敏运行日志存储于 `%LOCALAPPDATA%\PopTranslate\logs\app.log`。
 - 用户配置的所有第三方 API 密钥与代理密码在落盘前均通过 Windows DPAPI 绑定当前用户上下文加密，脱敏诊断日志绝不记录用户原文、译文或明文凭证。
 - 本项目不包含任何遥测或第三方数据收集逻辑；网络请求仅发往用户显式启用的翻译/OCR/大模型服务端点。
 

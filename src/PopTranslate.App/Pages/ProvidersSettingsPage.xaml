@@ -172,300 +172,338 @@
                 </Grid>
             </Border>
 
-            <!-- Right Column: Selected Provider Editor -->
-            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
-                <StackPanel Spacing="12">
-                    <Border
-                        Style="{StaticResource PopTranslateSettingsCardStyle}"
-                        Visibility="{x:Bind ViewModel.HasSelectedProvider, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
-                        <StackPanel Spacing="14">
-                            <Grid ColumnSpacing="12">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <StackPanel Grid.Column="0" Spacing="2">
-                                    <TextBlock
-                                        FontSize="16"
-                                        FontWeight="SemiBold"
-                                        Text="{x:Bind ViewModel.SelectedProvider.DisplayName, Mode=OneWay}" />
-                                    <TextBlock
-                                        FontSize="12"
-                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                        Text="{x:Bind ViewModel.SelectedProvider.KindLabel, Mode=OneWay}" />
-                                </StackPanel>
+            <!-- Right Column: Selected Provider Editor + Sticky Save/Test Footer -->
+            <Grid Grid.Column="1" RowSpacing="10">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
 
-                                <ToggleSwitch
-                                    Grid.Column="1"
-                                    OnContent="已启用"
-                                    OffContent="已停用"
-                                    IsOn="{x:Bind ViewModel.SelectedProvider.Enabled, Mode=TwoWay}" />
-                            </Grid>
-
-                            <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
-
-                            <!-- Common Fields -->
-                            <TextBox
-                                Header="显示名称"
-                                PlaceholderText="例如：DeepSeek 翻译 / GPT-4o mini"
-                                Text="{x:Bind ViewModel.SelectedProvider.DisplayName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-
-                            <!-- OpenAI-Compatible Specific Settings -->
-                            <StackPanel
-                                Spacing="12"
-                                Visibility="{x:Bind ViewModel.SelectedProvider.IsOpenAi, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
-                                <ComboBox
-                                    Header="服务功能定位"
-                                    HorizontalAlignment="Stretch"
-                                    SelectedIndex="{x:Bind ViewModel.SelectedProvider.RoleIndex, Mode=TwoWay}">
-                                    <ComboBoxItem Content="🌐 文本翻译" />
-                                    <ComboBoxItem Content="✨ 文本润色" />
-                                </ComboBox>
-
-                                <Grid
-                                    ColumnSpacing="12"
-                                    Visibility="{x:Bind ViewModel.SelectedProvider.IsPolishRole, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="200" />
-                                    </Grid.ColumnDefinitions>
-
-                                    <ComboBox
-                                        Grid.Column="0"
-                                        Header="触发方式"
-                                        HorizontalAlignment="Stretch"
-                                        SelectedIndex="{x:Bind ViewModel.SelectedProvider.TriggerModeIndex, Mode=TwoWay}">
-                                        <ComboBoxItem Content="自动并行运行" />
-                                        <ComboBoxItem Content="按需点击或 Alt+P 触发" />
-                                    </ComboBox>
-
-                                    <ComboBox
-                                        Grid.Column="1"
-                                        Header="默认润色风格"
-                                        HorizontalAlignment="Stretch"
-                                        SelectedIndex="{x:Bind ViewModel.SelectedProvider.DefaultPolishStyleIndex, Mode=TwoWay}">
-                                        <ComboBoxItem Content="通用自然" />
-                                        <ComboBoxItem Content="学术严谨" />
-                                        <ComboBoxItem Content="商务得体" />
-                                        <ComboBoxItem Content="口语地道" />
-                                        <ComboBoxItem Content="精简凝练" />
-                                        <ComboBoxItem Content="代码命名" />
-                                        <ComboBoxItem Content="自定义 Prompt" />
-                                    </ComboBox>
-                                </Grid>
-
-                                <TextBox
-                                    Header="API Base URL"
-                                    PlaceholderText="https://api.openai.com/v1"
-                                    Text="{x:Bind ViewModel.SelectedProvider.BaseUrl, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-
-                                <Grid ColumnSpacing="10">
+                <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto">
+                    <StackPanel Spacing="12">
+                        <Border
+                            Style="{StaticResource PopTranslateSettingsCardStyle}"
+                            Visibility="{x:Bind ViewModel.HasSelectedProvider, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                            <StackPanel Spacing="14">
+                                <Grid ColumnSpacing="12">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
-                                        <ColumnDefinition Width="124" />
                                     </Grid.ColumnDefinitions>
-                                    <TextBox
-                                        Grid.Column="0"
-                                        Header="模型名称 (Model)"
-                                        PlaceholderText="gpt-4o-mini / deepseek-chat / qwen2.5"
-                                        Text="{x:Bind ViewModel.SelectedProvider.Model, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                                    <Button
+                                    <StackPanel Grid.Column="0" Spacing="2">
+                                        <TextBlock
+                                            FontSize="16"
+                                            FontWeight="SemiBold"
+                                            Text="{x:Bind ViewModel.SelectedProvider.DisplayName, Mode=OneWay}" />
+                                        <TextBlock
+                                            FontSize="12"
+                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                            Text="{x:Bind ViewModel.SelectedProvider.KindLabel, Mode=OneWay}" />
+                                    </StackPanel>
+
+                                    <ToggleSwitch
                                         Grid.Column="1"
-                                        VerticalAlignment="Bottom"
-                                        ToolTipService.ToolTip="从当前 API Base URL 拉取可用模型列表"
-                                        IsEnabled="{x:Bind ViewModel.CanFetchModels, Mode=OneWay}"
-                                        Command="{x:Bind ViewModel.FetchModelsCommand}">
-                                        <StackPanel Orientation="Horizontal" Spacing="6">
-                                            <FontIcon FontSize="12" Glyph="&#xE72C;" />
-                                            <TextBlock Text="拉取模型" />
-                                        </StackPanel>
-                                    </Button>
-                                    <NumberBox
-                                        Grid.Column="2"
-                                        Header="Temperature"
-                                        Minimum="0"
-                                        Maximum="2"
-                                        SmallChange="0.1"
-                                        SpinButtonPlacementMode="Compact"
-                                        Value="{x:Bind ViewModel.SelectedProvider.Temperature, Mode=TwoWay}" />
+                                        OnContent="已启用"
+                                        OffContent="已停用"
+                                        IsOn="{x:Bind ViewModel.SelectedProvider.Enabled, Mode=TwoWay}" />
                                 </Grid>
 
-                                <ComboBox
-                                    Header="已拉取的可用模型（点击快速填入）"
-                                    HorizontalAlignment="Stretch"
-                                    PlaceholderText="从已拉取模型列表中选择..."
-                                    Visibility="{x:Bind ViewModel.HasDiscoveredModels, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
-                                    ItemsSource="{x:Bind ViewModel.DiscoveredModels, Mode=OneWay}"
-                                    SelectedItem="{x:Bind ViewModel.SelectedDiscoveredModel, Mode=TwoWay}" />
+                                <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
 
-                                <PasswordBox
-                                    Header="API Key（Windows DPAPI 本地加密保存）"
-                                    PlaceholderText="sk-..."
-                                    Password="{x:Bind ViewModel.SelectedProvider.ApiKeyPlaintext, Mode=TwoWay}" />
+                                <!-- Common Fields -->
+                                <TextBox
+                                    Header="显示名称"
+                                    PlaceholderText="例如：DeepSeek 翻译 / GPT-4o mini"
+                                    Text="{x:Bind ViewModel.SelectedProvider.DisplayName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
 
-                                <Border
-                                    Background="{ThemeResource SubtleFillColorSecondaryBrush}"
-                                    CornerRadius="6"
-                                    Padding="12,8"
-                                    Visibility="{x:Bind ViewModel.SelectedProvider.ShowPresetPolishPromptHint, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
-                                    <TextBlock
-                                        Text="当前润色风格已内置专业润色提示词（自动保持原文语种输出，不跨语种翻译）。如需编写自定义指令，可将「默认润色风格」切换为「自定义 Prompt」。"
-                                        Style="{StaticResource CaptionTextBlockStyle}"
-                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                        TextWrapping="Wrap" />
-                                </Border>
-
+                                <!-- OpenAI-Compatible Specific Settings -->
                                 <StackPanel
-                                    Spacing="6"
-                                    Visibility="{x:Bind ViewModel.SelectedProvider.ShowSystemPromptSection, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
-                                    <Grid>
-                                        <TextBlock
-                                            Text="{x:Bind ViewModel.SelectedProvider.SystemPromptHeader, Mode=OneWay}"
-                                            VerticalAlignment="Center" />
-                                        <Button
-                                            Content="恢复默认"
-                                            HorizontalAlignment="Right"
-                                            Padding="8,2"
-                                            FontSize="12"
-                                            Command="{x:Bind ViewModel.ResetSystemPromptCommand}" />
+                                    Spacing="12"
+                                    Visibility="{x:Bind ViewModel.SelectedProvider.IsOpenAi, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                                    <ComboBox
+                                        Header="服务功能定位"
+                                        HorizontalAlignment="Stretch"
+                                        SelectedIndex="{x:Bind ViewModel.SelectedProvider.RoleIndex, Mode=TwoWay}">
+                                        <ComboBoxItem Content="🌐 文本翻译" />
+                                        <ComboBoxItem Content="✨ 文本润色" />
+                                    </ComboBox>
+
+                                    <Grid
+                                        ColumnSpacing="12"
+                                        Visibility="{x:Bind ViewModel.SelectedProvider.IsPolishRole, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="200" />
+                                        </Grid.ColumnDefinitions>
+
+                                        <ComboBox
+                                            Grid.Column="0"
+                                            Header="触发方式"
+                                            HorizontalAlignment="Stretch"
+                                            SelectedIndex="{x:Bind ViewModel.SelectedProvider.TriggerModeIndex, Mode=TwoWay}">
+                                            <ComboBoxItem Content="自动并行运行" />
+                                            <ComboBoxItem Content="按需点击或 Alt+Q 触发" />
+                                        </ComboBox>
+
+                                        <ComboBox
+                                            Grid.Column="1"
+                                            Header="默认润色风格"
+                                            HorizontalAlignment="Stretch"
+                                            SelectedIndex="{x:Bind ViewModel.SelectedProvider.DefaultPolishStyleIndex, Mode=TwoWay}">
+                                            <ComboBoxItem Content="通用自然" />
+                                            <ComboBoxItem Content="学术严谨" />
+                                            <ComboBoxItem Content="商务得体" />
+                                            <ComboBoxItem Content="口语地道" />
+                                            <ComboBoxItem Content="精简凝练" />
+                                            <ComboBoxItem Content="代码命名" />
+                                            <ComboBoxItem Content="自定义 Prompt" />
+                                        </ComboBox>
                                     </Grid>
+
                                     <TextBox
-                                        AcceptsReturn="True"
-                                        TextWrapping="Wrap"
-                                        MinHeight="84"
-                                        MaxHeight="150"
-                                        ScrollViewer.VerticalScrollBarVisibility="Auto"
-                                        PlaceholderText="{x:Bind ViewModel.SelectedProvider.SystemPromptPlaceholder, Mode=OneWay}"
-                                        Text="{x:Bind ViewModel.SelectedProvider.SystemPrompt, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                        Header="API Base URL"
+                                        PlaceholderText="https://api.openai.com/v1"
+                                        Text="{x:Bind ViewModel.SelectedProvider.OpenAiBaseUrl, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                                    <Grid ColumnSpacing="10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="124" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBox
+                                            Grid.Column="0"
+                                            Header="模型名称 (Model)"
+                                            PlaceholderText="gpt-4o-mini / deepseek-chat / qwen2.5"
+                                            Text="{x:Bind ViewModel.SelectedProvider.Model, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                        <Button
+                                            Grid.Column="1"
+                                            VerticalAlignment="Bottom"
+                                            ToolTipService.ToolTip="从当前 API Base URL 拉取可用模型列表"
+                                            IsEnabled="{x:Bind ViewModel.CanFetchModels, Mode=OneWay}"
+                                            Command="{x:Bind ViewModel.FetchModelsCommand}">
+                                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                                <FontIcon FontSize="12" Glyph="&#xE72C;" />
+                                                <TextBlock Text="拉取模型" />
+                                            </StackPanel>
+                                        </Button>
+                                        <NumberBox
+                                            Grid.Column="2"
+                                            Header="Temperature"
+                                            Minimum="0"
+                                            Maximum="2"
+                                            SmallChange="0.1"
+                                            SpinButtonPlacementMode="Compact"
+                                            Value="{x:Bind ViewModel.SelectedProvider.Temperature, Mode=TwoWay}" />
+                                    </Grid>
+
+                                    <ComboBox
+                                        Header="已拉取的可用模型（点击快速填入）"
+                                        HorizontalAlignment="Stretch"
+                                        PlaceholderText="从已拉取模型列表中选择..."
+                                        Visibility="{x:Bind ViewModel.HasDiscoveredModels, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                                        ItemsSource="{x:Bind ViewModel.DiscoveredModels, Mode=OneWay}"
+                                        SelectedItem="{x:Bind ViewModel.SelectedDiscoveredModel, Mode=TwoWay}" />
+
+                                    <PasswordBox
+                                        x:Name="OpenAiApiKeyBox"
+                                        Header="API Key（输入后自动经 Windows DPAPI 本地加密保存）"
+                                        PlaceholderText="sk-..."
+                                        PasswordRevealMode="Peek"
+                                        Password="{x:Bind ViewModel.SelectedProvider.OpenAiApiKey, Mode=OneWay}"
+                                        PasswordChanged="OpenAiApiKeyBox_PasswordChanged" />
+
+                                    <Border
+                                        Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+                                        CornerRadius="6"
+                                        Padding="12,8"
+                                        Visibility="{x:Bind ViewModel.SelectedProvider.ShowPresetPolishPromptHint, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                                        <TextBlock
+                                            Text="当前润色风格已内置专业润色提示词（自动保持原文语种输出，不跨语种翻译）。如需编写自定义指令，可将「默认润色风格」切换为「自定义 Prompt」。"
+                                            Style="{StaticResource CaptionTextBlockStyle}"
+                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                            TextWrapping="Wrap" />
+                                    </Border>
+
+                                    <StackPanel
+                                        Spacing="6"
+                                        Visibility="{x:Bind ViewModel.SelectedProvider.ShowSystemPromptSection, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                                        <Grid>
+                                            <TextBlock
+                                                Text="{x:Bind ViewModel.SelectedProvider.SystemPromptHeader, Mode=OneWay}"
+                                                VerticalAlignment="Center" />
+                                            <Button
+                                                Content="恢复默认"
+                                                HorizontalAlignment="Right"
+                                                Padding="8,2"
+                                                FontSize="12"
+                                                Command="{x:Bind ViewModel.ResetSystemPromptCommand}" />
+                                        </Grid>
+                                        <TextBox
+                                            AcceptsReturn="True"
+                                            TextWrapping="Wrap"
+                                            MinHeight="84"
+                                            MaxHeight="150"
+                                            ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                            PlaceholderText="{x:Bind ViewModel.SelectedProvider.SystemPromptPlaceholder, Mode=OneWay}"
+                                            Text="{x:Bind ViewModel.SelectedProvider.SystemPrompt, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                        <TextBlock
+                                            Text="{x:Bind ViewModel.SelectedProvider.SystemPromptHint, Mode=OneWay}"
+                                            Style="{StaticResource CaptionTextBlockStyle}"
+                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                            TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </StackPanel>
+
+                                <!-- DeepL Specific Settings -->
+                                <StackPanel
+                                    Spacing="12"
+                                    Visibility="{x:Bind ViewModel.SelectedProvider.IsDeepL, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                                    <PasswordBox
+                                        x:Name="DeepLApiKeyBox"
+                                        Header="DeepL API Key（输入后自动经 Windows DPAPI 本地加密保存）"
+                                        PlaceholderText="输入 Free (:fx) 或 Pro Auth Key"
+                                        PasswordRevealMode="Peek"
+                                        Password="{x:Bind ViewModel.SelectedProvider.DeepLApiKey, Mode=OneWay}"
+                                        PasswordChanged="DeepLApiKeyBox_PasswordChanged" />
+
+                                    <ComboBox
+                                        Header="端点类型"
+                                        HorizontalAlignment="Stretch"
+                                        SelectedIndex="{x:Bind ViewModel.SelectedProvider.DeepLTierIndex, Mode=TwoWay}">
+                                        <ComboBoxItem Content="自动识别（以 :fx 结尾自动走 Free API）" />
+                                        <ComboBoxItem Content="DeepL Free API (api-free.deepl.com)" />
+                                        <ComboBoxItem Content="DeepL Pro API (api.deepl.com)" />
+                                    </ComboBox>
+
+                                    <TextBox
+                                        Header="自定义网关地址（可选，留空使用官方地址）"
+                                        PlaceholderText="https://api-free.deepl.com/v2/translate"
+                                        Text="{x:Bind ViewModel.SelectedProvider.DeepLBaseUrl, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
+
+                                <!-- Free Traditional Specific Settings -->
+                                <StackPanel
+                                    Spacing="12"
+                                    Visibility="{x:Bind ViewModel.SelectedProvider.IsFreeTraditional, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                                    <ComboBox
+                                        Header="免费引擎策略"
+                                        HorizontalAlignment="Stretch"
+                                        SelectedIndex="{x:Bind ViewModel.SelectedProvider.FreeEngineIndex, Mode=TwoWay}">
+                                        <ComboBoxItem Content="自动（优先 Google，失败自动回退 Bing）" />
+                                        <ComboBoxItem Content="仅使用 Google 免费翻译" />
+                                        <ComboBoxItem Content="仅使用 Bing 免费翻译" />
+                                    </ComboBox>
+                                    <TextBox
+                                        Header="自定义 Google 镜像地址（可选，留空自动使用官方多节点）"
+                                        PlaceholderText="https://clients5.google.com"
+                                        Text="{x:Bind ViewModel.SelectedProvider.FreeMirrorBaseUrl, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                                     <TextBlock
-                                        Text="{x:Bind ViewModel.SelectedProvider.SystemPromptHint, Mode=OneWay}"
+                                        Text="开箱即用，无需配置 API Key。Google 引擎内置多节点自动故障转移，若所处网络环境无法直连，可配置自定义镜像或在「网络与权限」中配置系统/HTTP/SOCKS5 代理。"
                                         Style="{StaticResource CaptionTextBlockStyle}"
                                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                         TextWrapping="Wrap" />
                                 </StackPanel>
+
+                                <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+                                <!-- Card Behavior & Timeout -->
+                                <Grid ColumnSpacing="16">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="150" />
+                                    </Grid.ColumnDefinitions>
+
+                                    <ToggleSwitch
+                                        Grid.Column="0"
+                                        Header="弹窗内默认折叠此卡片（点击展开时才触发请求，节省 Token）"
+                                        OnContent="默认折叠（按需触发）"
+                                        OffContent="默认展开"
+                                        IsOn="{x:Bind ViewModel.SelectedProvider.IsCollapsedByDefault, Mode=TwoWay}" />
+
+                                    <NumberBox
+                                        Grid.Column="1"
+                                        Header="超时时间（秒）"
+                                        Minimum="5"
+                                        Maximum="180"
+                                        SmallChange="5"
+                                        SpinButtonPlacementMode="Compact"
+                                        Value="{x:Bind ViewModel.SelectedProvider.TimeoutSeconds, Mode=TwoWay}" />
+                                </Grid>
                             </StackPanel>
+                        </Border>
 
-                            <!-- DeepL Specific Settings -->
-                            <StackPanel
-                                Spacing="12"
-                                Visibility="{x:Bind ViewModel.SelectedProvider.IsDeepL, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
-                                <PasswordBox
-                                    Header="DeepL API Key（Windows DPAPI 本地加密保存）"
-                                    PlaceholderText="输入 Free (:fx) 或 Pro Auth Key"
-                                    Password="{x:Bind ViewModel.SelectedProvider.ApiKeyPlaintext, Mode=TwoWay}" />
-
-                                <ComboBox
-                                    Header="端点类型"
-                                    HorizontalAlignment="Stretch"
-                                    SelectedIndex="{x:Bind ViewModel.SelectedProvider.DeepLTierIndex, Mode=TwoWay}">
-                                    <ComboBoxItem Content="自动识别（以 :fx 结尾自动走 Free API）" />
-                                    <ComboBoxItem Content="DeepL Free API (api-free.deepl.com)" />
-                                    <ComboBoxItem Content="DeepL Pro API (api.deepl.com)" />
-                                </ComboBox>
-
-                                <TextBox
-                                    Header="自定义网关地址（可选，留空使用官方地址）"
-                                    PlaceholderText="https://api-free.deepl.com/v2/translate"
-                                    Text="{x:Bind ViewModel.SelectedProvider.BaseUrl, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                            </StackPanel>
-
-                            <!-- Free Traditional Specific Settings -->
-                            <StackPanel
-                                Spacing="12"
-                                Visibility="{x:Bind ViewModel.SelectedProvider.IsFreeTraditional, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
-                                <ComboBox
-                                    Header="免费引擎策略"
-                                    HorizontalAlignment="Stretch"
-                                    SelectedIndex="{x:Bind ViewModel.SelectedProvider.FreeEngineIndex, Mode=TwoWay}">
-                                    <ComboBoxItem Content="自动（优先 Google，失败自动回退 Bing）" />
-                                    <ComboBoxItem Content="仅使用 Google 免费翻译" />
-                                    <ComboBoxItem Content="仅使用 Bing 免费翻译" />
-                                </ComboBox>
-                                <TextBox
-                                    Header="自定义 Google 镜像地址（可选，留空自动使用官方多节点）"
-                                    PlaceholderText="https://clients5.google.com"
-                                    Text="{x:Bind ViewModel.SelectedProvider.BaseUrl, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        <!-- Empty State when no provider is selected -->
+                        <Border
+                            Style="{StaticResource PopTranslateSettingsCardStyle}"
+                            Visibility="{x:Bind ViewModel.HasNoSelectedProvider, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                            <StackPanel Spacing="6" Padding="12,24" HorizontalAlignment="Center">
+                                <FontIcon FontSize="28" Glyph="&#xE8C1;" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                                 <TextBlock
-                                    Text="开箱即用，无需配置 API Key。Google 引擎内置多节点自动故障转移，若所处网络环境无法直连，可配置自定义镜像或在「网络与权限」中配置系统/HTTP/SOCKS5 代理。"
-                                    Style="{StaticResource CaptionTextBlockStyle}"
+                                    Text="请选择左侧服务实例，或点击上方按钮添加新的翻译服务"
                                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                    TextWrapping="Wrap" />
+                                    HorizontalAlignment="Center" />
                             </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
 
-                            <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
-
-                            <!-- Card Behavior & Timeout -->
-                            <Grid ColumnSpacing="16">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="150" />
-                                </Grid.ColumnDefinitions>
-
-                                <ToggleSwitch
-                                    Grid.Column="0"
-                                    Header="弹窗内默认折叠此卡片"
-                                    OnContent="默认折叠"
-                                    OffContent="默认展开"
-                                    IsOn="{x:Bind ViewModel.SelectedProvider.IsCollapsedByDefault, Mode=TwoWay}" />
-
-                                <NumberBox
-                                    Grid.Column="1"
-                                    Header="超时时间（秒）"
-                                    Minimum="5"
-                                    Maximum="180"
-                                    SmallChange="5"
-                                    SpinButtonPlacementMode="Compact"
-                                    Value="{x:Bind ViewModel.SelectedProvider.TimeoutSeconds, Mode=TwoWay}" />
-                            </Grid>
-
-                            <!-- Save / Test Bar -->
-                            <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,4,0,0">
-                                <Button
-                                    Style="{StaticResource AccentButtonStyle}"
-                                    Content="保存配置"
-                                    Command="{x:Bind ViewModel.SaveSelectedProviderCommand}" />
-
-                                <Button
-                                    Command="{x:Bind ViewModel.TestSelectedProviderCommand}"
-                                    IsEnabled="{x:Bind ViewModel.CanTestConnection, Mode=OneWay}">
-                                    <StackPanel Orientation="Horizontal" Spacing="6">
-                                        <FontIcon FontSize="12" Glyph="&#xE768;" />
-                                        <TextBlock Text="测试连接" />
-                                    </StackPanel>
-                                </Button>
-
-                                <ProgressRing
-                                    Width="20"
-                                    Height="20"
-                                    VerticalAlignment="Center"
-                                    IsActive="{x:Bind ViewModel.IsTestingConnection, Mode=OneWay}"
-                                    Visibility="{x:Bind ViewModel.IsTestingConnection, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
-                            </StackPanel>
-                        </StackPanel>
-                    </Border>
-
-                    <!-- Empty State when no provider is selected -->
+                <!-- Sticky Always-Visible Save / Test / Auto-Save Status Bar -->
+                <StackPanel Grid.Row="1" Spacing="8">
                     <Border
                         Style="{StaticResource PopTranslateSettingsCardStyle}"
-                        Visibility="{x:Bind ViewModel.HasNoSelectedProvider, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
-                        <StackPanel Spacing="6" Padding="12,24" HorizontalAlignment="Center">
-                            <FontIcon FontSize="28" Glyph="&#xE8C1;" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                        Padding="14,10"
+                        Visibility="{x:Bind ViewModel.HasSelectedProvider, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+
+                            <Button
+                                Grid.Column="0"
+                                Style="{StaticResource AccentButtonStyle}"
+                                Content="立即保存"
+                                Command="{x:Bind ViewModel.SaveSelectedProviderCommand}" />
+
+                            <Button
+                                Grid.Column="1"
+                                Command="{x:Bind ViewModel.TestSelectedProviderCommand}"
+                                IsEnabled="{x:Bind ViewModel.CanTestConnection, Mode=OneWay}">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <FontIcon FontSize="12" Glyph="&#xE768;" />
+                                    <TextBlock Text="测试连接" />
+                                </StackPanel>
+                            </Button>
+
+                            <ProgressRing
+                                Grid.Column="2"
+                                Width="18"
+                                Height="18"
+                                VerticalAlignment="Center"
+                                IsActive="{x:Bind ViewModel.IsTestingConnection, Mode=OneWay}"
+                                Visibility="{x:Bind ViewModel.IsTestingConnection, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
+
                             <TextBlock
-                                Text="请选择左侧服务实例，或点击上方按钮添加新的翻译服务"
+                                Grid.Column="3"
+                                FontSize="12"
+                                HorizontalAlignment="Right"
+                                VerticalAlignment="Center"
                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                HorizontalAlignment="Center" />
-                        </StackPanel>
+                                Text="{x:Bind ViewModel.AutoSaveStatusText, Mode=OneWay}" />
+                        </Grid>
                     </Border>
 
                     <!-- Feedback Banner -->
                     <InfoBar
                         IsOpen="{x:Bind ViewModel.HasFeedback, Mode=OneWay}"
-                        IsClosable="False"
+                        IsClosable="True"
                         Severity="{x:Bind ViewModel.FeedbackSeverity, Mode=OneWay}"
                         Message="{x:Bind ViewModel.FeedbackMessage, Mode=OneWay}" />
                 </StackPanel>
-            </ScrollViewer>
+            </Grid>
         </Grid>
     </Grid>
 </Page>
