@@ -203,6 +203,7 @@ public sealed class AppCoordinator : IDisposable
         _popupWindow.ScreenshotRequested += (_, _) => _ = TriggerScreenshotTranslationAsync(forceSilentCopyOnly: false);
         _popupWindow.FixedPositionMoved += OnPopupFixedPositionMoved;
         _popupWindow.PopupWidthChanged += OnPopupWidthChanged;
+        _popupWindow.PopupHeightChanged += OnPopupHeightChanged;
         _popupWindow.PopupShown += OnPopupShown;
         _popupWindow.PopupHidden += OnPopupHidden;
         _popupViewModel.PinStateChanged += OnPopupPinStateChanged;
@@ -1338,10 +1339,21 @@ public sealed class AppCoordinator : IDisposable
             return;
         }
 
-        _ = PersistWindowGeometryAsync(null, null, widthDips);
+        _ = PersistWindowGeometryAsync(null, null, widthDips, null);
     }
 
-    private async Task PersistWindowGeometryAsync(int? fixedX, int? fixedY, double? popupWidth)
+    private void OnPopupHeightChanged(object? sender, double heightDips)
+    {
+        var current = _settingsStore.Current;
+        if (Math.Abs(current.Window.PopupMaxHeight - heightDips) < 4)
+        {
+            return;
+        }
+
+        _ = PersistWindowGeometryAsync(null, null, null, heightDips);
+    }
+
+    private async Task PersistWindowGeometryAsync(int? fixedX, int? fixedY, double? popupWidth, double? popupHeight = null)
     {
         try
         {
@@ -1349,6 +1361,7 @@ public sealed class AppCoordinator : IDisposable
             if (fixedX.HasValue) updated.Window.FixedX = fixedX.Value;
             if (fixedY.HasValue) updated.Window.FixedY = fixedY.Value;
             if (popupWidth.HasValue) updated.Window.PopupWidth = popupWidth.Value;
+            if (popupHeight.HasValue) updated.Window.PopupMaxHeight = popupHeight.Value;
             await _settingsStore.SaveAsync(updated);
         }
         catch

@@ -365,11 +365,12 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
-                            <TextBlock Text="弹窗宽度与最大高度（DIPs）" FontWeight="SemiBold" />
+                            <TextBlock Text="弹窗宽度与面板高度（DIPs）" FontWeight="SemiBold" />
                             <TextBlock
-                                Text="弹窗高度随翻译结果自动伸缩，超过最大高度后内部平滑滚动"
+                                Text="采用 Raycast 风格固定结果面板高度，流式输出全程不跳动，长文内部平滑滚动（也可直接拖拽窗口边缘调整）"
                                 Style="{StaticResource CaptionTextBlockStyle}"
-                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                TextWrapping="Wrap" />
                         </StackPanel>
                         <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
                             <NumberBox
@@ -381,9 +382,9 @@
                                 SpinButtonPlacementMode="Compact"
                                 Value="{x:Bind ViewModel.PopupWidth, Mode=TwoWay}" />
                             <NumberBox
-                                Header="最大高度"
+                                Header="面板高度"
                                 Width="110"
-                                Minimum="300"
+                                Minimum="320"
                                 Maximum="1000"
                                 SmallChange="40"
                                 SpinButtonPlacementMode="Compact"
