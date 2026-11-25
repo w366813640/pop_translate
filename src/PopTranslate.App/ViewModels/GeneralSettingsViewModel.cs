@@ -95,7 +95,7 @@ public sealed partial class GeneralSettingsViewModel : ObservableObject
     public partial double PopupWidth { get; set; } = 440;
 
     [ObservableProperty]
-    public partial double PopupMaxHeight { get; set; } = 520;
+    public partial double PopupMaxHeight { get; set; } = 640;
 
     [ObservableProperty]
     public partial bool PinByDefault { get; set; }

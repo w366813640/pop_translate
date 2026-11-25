@@ -7,52 +7,110 @@ namespace PopTranslate.Tests.Integration;
 public sealed class SmoothPopupHeightAndCompositionTests
 {
     [Fact]
-    public void ResolvePanelHeightDips_UsesRaycastTwoStateFixedGeometry_NeverResizesDuringStreaming()
+    public void EstimateInitialHeightDips_FitsTightlyWithoutRedundantBlankSpace_AndScalesOnlyForLongText()
     {
-        // 1. Compact idle input state (no cards, no OCR, no guard, no banner) -> fixed compact height (230 DIPs).
-        var idleHeight = PopupHeightPolicy.ResolvePanelHeightDips(
-            hasExpandedContent: false,
-            configuredPanelHeightDips: 520,
-            minHeightDips: 190,
-            maxHeightDips: 1000);
-        Assert.Equal(PopupHeightPolicy.CompactIdleHeightDips, idleHeight);
+        // 1. Exact screenshot scenario: 80-char source, 1 expanded card + 2 collapsed cards, maxHeight=640.
+        //    Must stay tight (~340-440 DIPs), NEVER blindly stretched to 640 with 240px empty bottom void!
+        var mediumHeight = PopupHeightPolicy.EstimateInitialHeightDips(new PopupInitialHeightInput(
+            BaseChromeHeightDips: 110,
+            MeasuredCardsHeightDips: 64,
+            SourceTextLength: 80,
+            ExpandedActiveCardCount: 1,
+            CollapsedOrOnDemandCardCount: 2,
+            IsAnyCardLoading: true,
+            PopupWidthDips: 460,
+            MinHeightDips: 190,
+            MaxHeightDips: 640));
+        Assert.InRange(mediumHeight, 330, 445);
 
-        // 2. Results / streaming state -> ONE fixed rock-solid panel height (zero token-by-token resizing!).
-        var streamingStartHeight = PopupHeightPolicy.ResolvePanelHeightDips(
-            hasExpandedContent: true,
-            configuredPanelHeightDips: 520,
-            minHeightDips: 190,
-            maxHeightDips: 1000);
-        var streamingMidHeight = PopupHeightPolicy.ResolvePanelHeightDips(
-            hasExpandedContent: true,
-            configuredPanelHeightDips: 520,
-            minHeightDips: 190,
-            maxHeightDips: 1000);
-        var streamingCompletedHeight = PopupHeightPolicy.ResolvePanelHeightDips(
-            hasExpandedContent: true,
-            configuredPanelHeightDips: 520,
-            minHeightDips: 190,
-            maxHeightDips: 1000);
+        // 2. Short word (10 chars), 1 expanded card -> very compact (~220-290 DIPs).
+        var shortHeight = PopupHeightPolicy.EstimateInitialHeightDips(new PopupInitialHeightInput(
+            BaseChromeHeightDips: 110,
+            MeasuredCardsHeightDips: 64,
+            SourceTextLength: 10,
+            ExpandedActiveCardCount: 1,
+            CollapsedOrOnDemandCardCount: 0,
+            IsAnyCardLoading: true,
+            PopupWidthDips: 460,
+            MinHeightDips: 190,
+            MaxHeightDips: 640));
+        Assert.InRange(shortHeight, 210, 295);
 
-        Assert.Equal(520.0, streamingStartHeight);
-        Assert.Equal(streamingStartHeight, streamingMidHeight);
-        Assert.Equal(streamingStartHeight, streamingCompletedHeight);
+        // 3. Long article (700 chars), 1 expanded card -> scales up toward MaxHeight to avoid repeated jumps.
+        var longHeight = PopupHeightPolicy.EstimateInitialHeightDips(new PopupInitialHeightInput(
+            BaseChromeHeightDips: 110,
+            MeasuredCardsHeightDips: 64,
+            SourceTextLength: 700,
+            ExpandedActiveCardCount: 1,
+            CollapsedOrOnDemandCardCount: 1,
+            IsAnyCardLoading: true,
+            PopupWidthDips: 460,
+            MinHeightDips: 190,
+            MaxHeightDips: 640));
+        Assert.InRange(longHeight, 520, 640);
 
-        // 3. Respects user-customized panel height within valid bounds (320..1000).
-        Assert.Equal(680.0, PopupHeightPolicy.ResolvePanelHeightDips(true, 680, 190, 1000));
-        Assert.Equal(320.0, PopupHeightPolicy.ResolvePanelHeightDips(true, 200, 190, 1000));
-        Assert.Equal(1000.0, PopupHeightPolicy.ResolvePanelHeightDips(true, 1400, 190, 1000));
+        // 4. Completed / idle state -> exact measured fit (ZERO redundant space!).
+        var exactCompleted = PopupHeightPolicy.EstimateInitialHeightDips(new PopupInitialHeightInput(
+            BaseChromeHeightDips: 110,
+            MeasuredCardsHeightDips: 295,
+            SourceTextLength: 80,
+            ExpandedActiveCardCount: 0,
+            CollapsedOrOnDemandCardCount: 2,
+            IsAnyCardLoading: false,
+            PopupWidthDips: 460,
+            MinHeightDips: 190,
+            MaxHeightDips: 640));
+        Assert.Equal(405.0, exactCompleted);
     }
 
     [Fact]
-    public void WindowBehaviorConfig_DefaultPopupHeight_UsesComfortableRaycastPanelHeight()
+    public void ResolveDynamicHeightDips_GrowsMonotonicallyWhileStreaming_AndTightensToExactFitWhenDone()
     {
-        var config = new WindowBehaviorConfig();
-        Assert.Equal(520.0, config.PopupMaxHeight);
+        var current = 250.0;
+        var resizeCount = 0;
+
+        // Streaming line-by-line growth from 270 -> 610 DIPs: grow-only in modest steps (no shrinking, far fewer jumps).
+        for (var desired = 270.0; desired <= 610.0; desired += 20.0)
+        {
+            var next = PopupHeightPolicy.ResolveDynamicHeightDips(new PopupDynamicHeightInput(
+                CurrentHeightDips: current,
+                MeasuredDesiredHeightDips: desired,
+                IsAnyCardLoading: true,
+                MinHeightDips: 190,
+                MaxHeightDips: 640));
+
+            Assert.True(next >= current, $"Height shrunk during streaming: {current} -> {next}");
+            Assert.True(next >= desired, $"Height {next} clipped desired {desired}");
+            if (Math.Abs(next - current) >= 1.0)
+            {
+                resizeCount++;
+                current = next;
+            }
+        }
+
+        Assert.InRange(resizeCount, 1, 6);
+
+        // Temporary mid-stream dip must NEVER shrink window.
+        var midStreamDip = PopupHeightPolicy.ResolveDynamicHeightDips(new PopupDynamicHeightInput(
+            CurrentHeightDips: 420,
+            MeasuredDesiredHeightDips: 310,
+            IsAnyCardLoading: true,
+            MinHeightDips: 190,
+            MaxHeightDips: 640));
+        Assert.Equal(420.0, midStreamDip);
+
+        // Once streaming completes, any leftover redundant space tightens cleanly to exact content fit!
+        var tightenedAfterStream = PopupHeightPolicy.ResolveDynamicHeightDips(new PopupDynamicHeightInput(
+            CurrentHeightDips: 480,
+            MeasuredDesiredHeightDips: 405,
+            IsAnyCardLoading: false,
+            MinHeightDips: 190,
+            MaxHeightDips: 640));
+        Assert.Equal(405.0, tightenedAfterStream);
     }
 
     [Fact]
-    public async Task PopupAndCardControls_ContainZeroGhostingOffsetOrClipAnimations_AndUseAutoScrollbar()
+    public async Task PopupAndCardControls_HaveZeroGhostingAnimationsAndExactTightFit()
     {
         var repoRoot = FindRepoRoot();
         var popupXaml = await File.ReadAllTextAsync(
@@ -62,16 +120,20 @@ public sealed class SmoothPopupHeightAndCompositionTests
         var cardCs = await File.ReadAllTextAsync(
             Path.Combine(repoRoot, "src", "PopTranslate.App", "Controls", "TranslationResultCardControl.xaml.cs"));
 
-        // Must NOT have ghosting-prone ImplicitAnimations[Offset] or InsetClip reveal hacks!
+        // Zero ghosting-prone ImplicitAnimations or InsetClip hacks!
         Assert.DoesNotContain("ImplicitAnimations", cardCs, StringComparison.Ordinal);
         Assert.DoesNotContain("ElementCompositionPreview", cardCs, StringComparison.Ordinal);
         Assert.DoesNotContain("InsetClip", popupCs, StringComparison.Ordinal);
         Assert.DoesNotContain("ElementCompositionPreview", popupCs, StringComparison.Ordinal);
 
-        // Popup uses clean Raycast fixed-panel policy with borderless wheel-scrollable CardsScrollViewer.
-        Assert.Contains("PopupHeightPolicy.ResolvePanelHeightDips", popupCs, StringComparison.Ordinal);
+        // Uses tight policy + keeps borderless hidden scrollbar with Auto wheel scroll.
+        Assert.Contains("PopupHeightPolicy.EstimateInitialHeightDips", popupCs, StringComparison.Ordinal);
+        Assert.Contains("PopupHeightPolicy.ResolveDynamicHeightDips", popupCs, StringComparison.Ordinal);
         Assert.Contains("VerticalScrollMode=\"Auto\"", popupXaml, StringComparison.Ordinal);
         Assert.Contains("VerticalScrollBarVisibility=\"Hidden\"", popupXaml, StringComparison.Ordinal);
+
+        // Default max height cap remains 640 DIPs.
+        Assert.Equal(640.0, new WindowBehaviorConfig().PopupMaxHeight);
     }
 
     private static string FindRepoRoot()

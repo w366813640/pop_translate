@@ -23,18 +23,22 @@ public sealed partial class TranslationPopupWindow : WindowEx
     private const double MinPopupHeightDips = 190;
     private const double MinPopupWidthDips = 360;
     private const double MaxPopupWidthDips = 760;
+    private static readonly TimeSpan HeightThrottleInterval = TimeSpan.FromMilliseconds(60);
 
     private readonly IWindowHelperService _windowHelperService;
+    private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _heightThrottleTimer;
     private WindowBehaviorConfig _behaviorConfig = new();
     private nint _hwnd;
     private bool _isPopupVisible;
     private bool _isInternalDeactivationCheckPending;
     private bool _isProgrammaticResize;
     private bool _isResizeQueued;
+    private bool _isManualHeightLocked;
     private bool _isInternalFlyoutOpen;
     private int _targetProgrammaticHeightPx;
     private int _openDropDownCount;
     private DateTimeOffset _lastShownUtc = DateTimeOffset.MinValue;
+    private DateTimeOffset _lastHeightUpdateUtc = DateTimeOffset.MinValue;
     private DateTimeOffset _lastFlyoutActivityUtc = DateTimeOffset.MinValue;
 
     // Borderless toolbar drag tracking (physical screen pixels)
@@ -57,6 +61,18 @@ public sealed partial class TranslationPopupWindow : WindowEx
         ExtendsContentIntoTitleBar = true;
 
         _hwnd = this.GetWindowHandle();
+
+        _heightThrottleTimer = DispatcherQueue.CreateTimer();
+        _heightThrottleTimer.Interval = HeightThrottleInterval;
+        _heightThrottleTimer.IsRepeating = false;
+        _heightThrottleTimer.Tick += (_, _) =>
+        {
+            if (IsPopupVisible && !_isManualHeightLocked)
+            {
+                _lastHeightUpdateUtc = DateTimeOffset.UtcNow;
+                UpdateWindowHeightToFitContent();
+            }
+        };
 
         ViewModel.AttachDispatcher(DispatcherQueue);
         ViewModel.ContentLayoutChanged += (_, _) => ScheduleDynamicHeightUpdate();
@@ -84,7 +100,6 @@ public sealed partial class TranslationPopupWindow : WindowEx
     public event EventHandler? ScreenshotRequested;
     public event EventHandler<ScreenPoint>? FixedPositionMoved;
     public event EventHandler<double>? PopupWidthChanged;
-    public event EventHandler<double>? PopupHeightChanged;
     public event EventHandler? PopupShown;
     public event EventHandler? PopupHidden;
 
@@ -119,9 +134,12 @@ public sealed partial class TranslationPopupWindow : WindowEx
 
     public void ShowPopup(ScreenPoint? anchorPoint, bool focusSourceInput, bool centerOnScreen = false)
     {
+        _heightThrottleTimer.Stop();
+        _isManualHeightLocked = false;
+
         var rawWidth = _behaviorConfig.PopupWidth > 0 ? _behaviorConfig.PopupWidth : DefaultFluentPopupWidthDips;
         var desiredWidthDips = Math.Clamp(rawWidth, MinPopupWidthDips, MaxPopupWidthDips);
-        var desiredHeightDips = ResolveCurrentPanelHeightDips();
+        var desiredHeightDips = CalculateInitialDesiredHeightDips(desiredWidthDips);
 
         var anchor = anchorPoint ?? _windowHelperService.GetCursorPosition();
         var monitor = _windowHelperService.GetMonitorAtPoint(anchor);
@@ -141,6 +159,7 @@ public sealed partial class TranslationPopupWindow : WindowEx
             centerOnScreen);
 
         _lastShownUtc = DateTimeOffset.UtcNow;
+        _lastHeightUpdateUtc = _lastShownUtc;
         _isPopupVisible = true;
         ViewModel.SetPopupVisible(true);
         _targetProgrammaticHeightPx = heightPx;
@@ -171,6 +190,8 @@ public sealed partial class TranslationPopupWindow : WindowEx
 
     public void HidePopup(bool cancelTranslations = true)
     {
+        _heightThrottleTimer.Stop();
+
         if (cancelTranslations)
         {
             ViewModel.CancelActiveTranslation();
@@ -185,6 +206,7 @@ public sealed partial class TranslationPopupWindow : WindowEx
         ViewModel.ResetInternalFlyoutState();
         _isDraggingToolbar = false;
         _hasDraggedDistance = false;
+        _isManualHeightLocked = false;
         _isPopupVisible = false;
         ViewModel.SetPopupVisible(false);
 
@@ -398,7 +420,27 @@ public sealed partial class TranslationPopupWindow : WindowEx
 
     private void ScheduleDynamicHeightUpdate()
     {
-        if (!IsPopupVisible || _isResizeQueued)
+        if (!IsPopupVisible || _isManualHeightLocked)
+        {
+            return;
+        }
+
+        var elapsed = DateTimeOffset.UtcNow - _lastHeightUpdateUtc;
+        if (elapsed < HeightThrottleInterval)
+        {
+            if (!_heightThrottleTimer.IsRunning)
+            {
+                var remaining = HeightThrottleInterval - elapsed;
+                _heightThrottleTimer.Interval = remaining > TimeSpan.FromMilliseconds(12)
+                    ? remaining
+                    : TimeSpan.FromMilliseconds(12);
+                _heightThrottleTimer.Start();
+            }
+
+            return;
+        }
+
+        if (_isResizeQueued)
         {
             return;
         }
@@ -407,18 +449,19 @@ public sealed partial class TranslationPopupWindow : WindowEx
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
         {
             _isResizeQueued = false;
-            if (!IsPopupVisible)
+            if (!IsPopupVisible || _isManualHeightLocked)
             {
                 return;
             }
 
+            _lastHeightUpdateUtc = DateTimeOffset.UtcNow;
             UpdateWindowHeightToFitContent();
         });
     }
 
     private void UpdateWindowHeightToFitContent()
     {
-        if (_isDraggingToolbar)
+        if (_isManualHeightLocked || _isDraggingToolbar)
         {
             return;
         }
@@ -429,9 +472,20 @@ public sealed partial class TranslationPopupWindow : WindowEx
             scale = 1.0;
         }
 
-        var desiredHeightDips = ResolveCurrentPanelHeightDips();
+        var maxHeightDips = Math.Clamp(_behaviorConfig.PopupMaxHeight, 300, 1000);
         var currentSizePx = AppWindow.Size;
-        var targetHeightPx = Math.Max(180, (int)Math.Ceiling(desiredHeightDips * scale));
+        var currentHeightDips = currentSizePx.Height / scale;
+        var measuredDesiredDips = CalculateMeasuredDesiredHeightDips();
+
+        var resolvedHeightDips = PopupHeightPolicy.ResolveDynamicHeightDips(new PopupDynamicHeightInput(
+            CurrentHeightDips: currentHeightDips,
+            MeasuredDesiredHeightDips: measuredDesiredDips,
+            IsAnyCardLoading: ViewModel.IsAnyCardLoading,
+            MinHeightDips: MinPopupHeightDips,
+            MaxHeightDips: maxHeightDips,
+            LookaheadStepDips: PopupHeightPolicy.DefaultLookaheadStepDips));
+
+        var targetHeightPx = Math.Max(180, (int)Math.Ceiling(resolvedHeightDips * scale));
 
         if (Math.Abs(currentSizePx.Height - targetHeightPx) < 4)
         {
@@ -468,19 +522,49 @@ public sealed partial class TranslationPopupWindow : WindowEx
         }
     }
 
-    private bool HasExpandedContent() =>
-        ViewModel.ServiceCards.Count > 0 ||
-        ViewModel.HasPendingInputGuard ||
-        ViewModel.IsOcrLoading ||
-        ViewModel.HasStatusBanner ||
-        ViewModel.ShowNoEnabledProvidersHint;
+    private double CalculateInitialDesiredHeightDips(double desiredWidthDips)
+    {
+        var maxHeightDips = Math.Clamp(_behaviorConfig.PopupMaxHeight, 300, 1000);
+        var baseChromeH = CalculateBaseChromeHeightDips();
+        var measuredCardsH = CalculateMeasuredCardsHeightDips();
+        var expandedActiveCards = ViewModel.ServiceCards.Count(c => c.IsLoading && !c.IsCollapsed);
+        var collapsedOrOnDemandCards = ViewModel.ServiceCards.Count(c => c.IsCollapsed || c.IsWaitingOnDemand);
 
-    private double ResolveCurrentPanelHeightDips() =>
-        PopupHeightPolicy.ResolvePanelHeightDips(
-            hasExpandedContent: HasExpandedContent(),
-            configuredPanelHeightDips: _behaviorConfig.PopupMaxHeight,
-            minHeightDips: MinPopupHeightDips,
-            maxHeightDips: 1000.0);
+        return PopupHeightPolicy.EstimateInitialHeightDips(new PopupInitialHeightInput(
+            BaseChromeHeightDips: baseChromeH,
+            MeasuredCardsHeightDips: measuredCardsH,
+            SourceTextLength: ViewModel.SourceText?.Length ?? 0,
+            ExpandedActiveCardCount: expandedActiveCards,
+            CollapsedOrOnDemandCardCount: collapsedOrOnDemandCards,
+            IsAnyCardLoading: ViewModel.IsAnyCardLoading,
+            PopupWidthDips: desiredWidthDips,
+            MinHeightDips: MinPopupHeightDips,
+            MaxHeightDips: maxHeightDips));
+    }
+
+    private double CalculateMeasuredDesiredHeightDips()
+    {
+        var maxHeightDips = Math.Clamp(_behaviorConfig.PopupMaxHeight, 300, 1000);
+        return Math.Clamp(CalculateBaseChromeHeightDips() + CalculateMeasuredCardsHeightDips(), MinPopupHeightDips, maxHeightDips);
+    }
+
+    private double CalculateBaseChromeHeightDips()
+    {
+        var toolbarH = TopToolbarGrid.ActualHeight > 0 ? TopToolbarGrid.ActualHeight : 54;
+        var fallbackSourceH = (ViewModel.IsSourceCardCollapsed ? 50 : 122) + (ViewModel.HasOcrContext ? 42 : 0);
+        var sourceH = IsPopupVisible && SourceSectionPanel.ActualHeight > 0
+            ? SourceSectionPanel.ActualHeight + 12
+            : fallbackSourceH;
+        var bannerH = StatusBannerBorder.Visibility == Visibility.Visible && StatusBannerBorder.ActualHeight > 0
+            ? StatusBannerBorder.ActualHeight + 10
+            : 0;
+        return toolbarH + sourceH + bannerH + 6;
+    }
+
+    private double CalculateMeasuredCardsHeightDips() =>
+        ViewModel.ServiceCards.Count == 0 && !ViewModel.ShowNoEnabledProvidersHint && !ViewModel.HasPendingInputGuard
+            ? 64
+            : (CardsContentPanel.ActualHeight > 0 ? CardsContentPanel.ActualHeight + 16 : 64);
 
     public static ScreenPoint ResolvePopupPosition(
         IWindowHelperService windowHelperService,
@@ -617,19 +701,12 @@ public sealed partial class TranslationPopupWindow : WindowEx
             PopupWidthChanged?.Invoke(this, _behaviorConfig.PopupWidth);
         }
 
-        // Remember user's custom panel height when manually dragging the top/bottom window border in expanded mode.
+        // Lock session auto-height if the user manually dragged the top/bottom window border vertically.
         var actualHeightPx = AppWindow.Size.Height;
-        if (HasExpandedContent() &&
-            _targetProgrammaticHeightPx > 0 &&
-            Math.Abs(actualHeightPx - _targetProgrammaticHeightPx) >= 12)
+        if (_targetProgrammaticHeightPx > 0 && Math.Abs(actualHeightPx - _targetProgrammaticHeightPx) >= 12)
         {
-            var heightDips = Math.Clamp(Math.Round(args.Size.Height), PopupHeightPolicy.MinExpandedPanelHeightDips, 1000);
-            if (Math.Abs(heightDips - _behaviorConfig.PopupMaxHeight) >= 8)
-            {
-                _behaviorConfig.PopupMaxHeight = heightDips;
-                _targetProgrammaticHeightPx = actualHeightPx;
-                PopupHeightChanged?.Invoke(this, _behaviorConfig.PopupMaxHeight);
-            }
+            _isManualHeightLocked = true;
+            _heightThrottleTimer.Stop();
         }
     }
 

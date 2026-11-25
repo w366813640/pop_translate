@@ -10,7 +10,7 @@ public sealed class WindowBehaviorConfig
 
     public double PopupWidth { get; set; } = 440;
 
-    public double PopupMaxHeight { get; set; } = 520;
+    public double PopupMaxHeight { get; set; } = 640;
 
     public bool PinByDefault { get; set; }
 

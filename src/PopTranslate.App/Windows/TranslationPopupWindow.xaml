@@ -42,7 +42,7 @@
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
 
-            <!-- Left: Responsive Clean Fluent 2 Language Pill Group (Zero Clipping) -->
+            <!-- Left: Clean Fluent 2 Language Pill Group (Full Labels at Default Width, Ellipsis Only When Narrow) -->
             <Grid
                 Grid.Column="0"
                 HorizontalAlignment="Left"
@@ -50,9 +50,9 @@
                 ColumnSpacing="3"
                 VerticalAlignment="Center">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
                 <Button
@@ -61,7 +61,6 @@
                     Style="{StaticResource PopTranslateLanguagePillButtonStyle}"
                     Padding="8,0,7,0"
                     HorizontalAlignment="Left"
-                    HorizontalContentAlignment="Stretch"
                     AutomationProperties.Name="源语言"
                     ToolTipService.ToolTip="选择源语言">
                     <Button.Flyout>
@@ -72,32 +71,26 @@
                             Opening="SourceLangMenuFlyout_Opening"
                             Closed="InternalFlyout_Closed" />
                     </Button.Flyout>
-                    <Grid ColumnSpacing="4" VerticalAlignment="Center">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
+                    <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
                         <TextBlock
-                            Grid.Column="0"
-                            FontSize="12.5"
-                            MaxWidth="112"
+                            FontSize="12"
+                            MaxWidth="116"
                             TextTrimming="CharacterEllipsis"
                             VerticalAlignment="Center"
                             Foreground="{ThemeResource TextFillColorPrimaryBrush}"
                             Text="{x:Bind ViewModel.SourceLanguageButtonText, Mode=OneWay}" />
                         <FontIcon
-                            Grid.Column="1"
                             FontSize="9"
                             Glyph="&#xE70D;"
                             VerticalAlignment="Center"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                    </Grid>
+                    </StackPanel>
                 </Button>
 
                 <Button
                     Grid.Column="1"
                     Style="{StaticResource PopTranslateMicroIconButtonStyle}"
-                    Width="24"
+                    Width="22"
                     Height="28"
                     Command="{x:Bind ViewModel.SwapLanguagesCommand}"
                     AutomationProperties.Name="互换源语言与目标语言"
@@ -114,7 +107,6 @@
                     Style="{StaticResource PopTranslateLanguagePillButtonStyle}"
                     Padding="8,0,7,0"
                     HorizontalAlignment="Left"
-                    HorizontalContentAlignment="Stretch"
                     AutomationProperties.Name="目标语言"
                     ToolTipService.ToolTip="选择目标语言">
                     <Button.Flyout>
@@ -125,27 +117,21 @@
                             Opening="TargetLangMenuFlyout_Opening"
                             Closed="InternalFlyout_Closed" />
                     </Button.Flyout>
-                    <Grid ColumnSpacing="4" VerticalAlignment="Center">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
+                    <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
                         <TextBlock
-                            Grid.Column="0"
-                            FontSize="12.5"
+                            FontSize="12"
                             FontWeight="SemiBold"
-                            MaxWidth="112"
+                            MaxWidth="108"
                             TextTrimming="CharacterEllipsis"
                             VerticalAlignment="Center"
                             Foreground="{ThemeResource TextFillColorPrimaryBrush}"
                             Text="{x:Bind ViewModel.TargetLanguageButtonText, Mode=OneWay}" />
                         <FontIcon
-                            Grid.Column="1"
                             FontSize="9"
                             Glyph="&#xE70D;"
                             VerticalAlignment="Center"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                    </Grid>
+                    </StackPanel>
                 </Button>
             </Grid>
 
